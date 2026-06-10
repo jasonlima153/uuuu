@@ -3,7 +3,11 @@
 #import <UserNotifications/UserNotifications.h>
 #import <AudioToolbox/AudioToolbox.h>
 
-static UIBackgroundTaskIdentifier bgTask = UIBackgroundTaskInvalid;
+static UIBackgroundTaskIdentifier bgTask;
+
+%ctor {
+    bgTask = UIBackgroundTaskInvalid;
+}
 
 #pragma mark - 1. UserDefaults 沙盒硬隔离 (ObjC 层)
 
