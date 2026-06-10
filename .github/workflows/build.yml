@@ -22,7 +22,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /Users/runner/theos
-          key: theos-sdk-macos-v3
+          key: theos-sdk-macos-v4
 
       - name: Install Theos (git clone, no API)
         run: |
@@ -31,14 +31,16 @@ jobs:
           fi
           echo "$THEOS/bin" >> $GITHUB_PATH
 
-      - name: Install iOS SDK manually
+      - name: Install iOS SDK (sparse clone)
         run: |
-          if [ ! -d "$THEOS/sdks/iPhoneOS.sdk" ]; then
+          if [ ! -d "$THEOS/sdks/iPhoneOS16.5.sdk" ]; then
             mkdir -p "$THEOS/sdks"
             cd "$THEOS/sdks"
-            curl -LO https://github.com/theos/sdks/raw/master/iPhoneOS16.5.sdk.tar.xz
-            tar -xJf iPhoneOS16.5.sdk.tar.xz
-            rm iPhoneOS16.5.sdk.tar.xz
+            git init
+            git remote add origin https://github.com/theos/sdks.git
+            git config core.sparseCheckout true
+            echo "iPhoneOS16.5.sdk/" >> .git/info/sparse-checkout
+            git pull --depth=1 origin master
             ln -sf iPhoneOS16.5.sdk iPhoneOS.sdk
           fi
 
