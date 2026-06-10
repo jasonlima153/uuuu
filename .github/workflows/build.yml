@@ -1,0 +1,45 @@
+name: Build UUUTalkFix.dylib
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Theos
+        run: |
+          bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
+
+      - name: Setup iOS SDK
+        run: |
+          # 下载 iOS SDK (使用开源的 sdks 仓库)
+          git clone --depth 1 https://github.com/theos/sdks.git $THEOS/sdks
+
+      - name: Build dylib
+        run: |
+          export THEOS=~/theos
+          make clean
+          make
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: UUUTalkFix.dylib
+          path: .theos/obj/debug/UUUTalkFix.dylib
+
+      - name: Release (on tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: .theos/obj/debug/UUUTalkFix.dylib
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
