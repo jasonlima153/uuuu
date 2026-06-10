@@ -44,6 +44,9 @@ jobs:
             ln -sf iPhoneOS16.5.sdk iPhoneOS.sdk
           fi
 
+      - name: Install ldid
+        run: brew install ldid
+
       - name: Build dylib
         run: |
           make clean || true
