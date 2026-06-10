@@ -3,6 +3,20 @@
 #import <objc/runtime.h>
 
 // 全局通知生命周期监听销毁者
+// 开关状态变更回调 helper 类
+@interface AntiRevokeToggleHelper : NSObject
+@property (nonatomic, weak) UISwitch *toggleSwitch;
+@end
+@implementation AntiRevokeToggleHelper
+- (void)switchToggled:(UISwitch *)sender {
+    BOOL isOn = sender.on;
+    NSUserDefaults *d = [[NSUserDefaults alloc] initWithSuiteName:@"AntiRevokeSuite"];
+    [d setBool:isOn forKey:kAntiRevokeEnabledKey];
+    [d synchronize];
+    NSLog(@"[AntiRevoke] 开关状态已更新: %@", isOn ? @"开启" : @"关闭");
+}
+@end
+
 static id launchObserver = nil;
 
 // 设置开关持久化 Key
@@ -77,25 +91,24 @@ static void injectSettingsToggle() {
                     toggleSwitch.on = enabled;
                     toggleSwitch.onTintColor = [UIColor colorWithRed:0.2 green:0.6 blue:1.0 alpha:1.0];
                     
-                    [toggleSwitch addTarget:[NSBlockOperation blockOperationWithBlock:^{
-                        BOOL isOn = toggleSwitch.on;
-                        NSUserDefaults *d = [[NSUserDefaults alloc] initWithSuiteName:@"AntiRevokeSuite"];
-                        [d setBool:isOn forKey:kAntiRevokeEnabledKey];
-                        [d synchronize];
-                        NSLog(@"[AntiRevoke] 开关状态已更新: %@", isOn ? @"开启" : @"关闭");
-                    }] forControlEvents:UIControlEventValueChanged];
+                    // 使用 helper 对象接收开关事件
+                    AntiRevokeToggleHelper *toggleHelper = [[AntiRevokeToggleHelper alloc] init];
+                    toggleHelper.toggleSwitch = toggleSwitch;
+                    [toggleSwitch addTarget:toggleHelper action:@selector(switchToggled:) forControlEvents:UIControlEventValueChanged];
                     
                     // 插入到 tableView 第一组末尾
                     @try {
-                        NSInteger lastSection = tableView.numberOfSections > 0 ? 0 : 0;
-                        if (tableView.numberOfSections > 0) {
+                        NSInteger lastSection = 0;
+                        if ([tableView numberOfSections] > 0) {
                             lastSection = 0;
                         }
-                        [tableView insertRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:tableView.numberOfRowsInSection(lastSection) inSection:lastSection]]
+                        NSInteger rowCount = [tableView numberOfRowsInSection:lastSection];
+                        [tableView insertRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:rowCount inSection:lastSection]]
                                           withRowAnimation:UITableViewRowAnimationAutomatic];
                         
-                        // 用关联对象持有 cell 防止被释放
+                        // 用关联对象持有 cell 和 helper 防止被释放
                         objc_setAssociatedObject(self, "AntiRevokeToggleCell", toggleCell, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                        objc_setAssociatedObject(self, "AntiRevokeToggleHelper", toggleHelper, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                     } @catch (NSException *e) {
                         NSLog(@"[AntiRevoke] 插入开关行失败: %@", e.reason);
                     }
