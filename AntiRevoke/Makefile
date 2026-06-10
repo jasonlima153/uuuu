@@ -11,6 +11,6 @@ AntiRevoke_FILES = Tweak.x
 
 AntiRevoke_FRAMEWORKS = UIKit Foundation
 
-AntiRevoke_CFLAGS = -fobjc-arc
+AntiRevoke_CFLAGS = -fobjc-arc -Wno-arc-performSelector-leaks
 
 include $(THEOS_MAKE_PATH)/tweak.mk
