@@ -7,6 +7,9 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+env:
+  THEOS: ${{ github.workspace }}/theos
+
 jobs:
   build:
     runs-on: macos-latest
@@ -15,19 +18,28 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Cache Theos
+        uses: actions/cache@v4
+        with:
+          path: theos
+          key: theos-${{ runner.os }}-v1
+
       - name: Setup Theos
         run: |
-          bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
+          if [ ! -d "$THEOS/bin" ]; then
+            bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
+            mv ~/theos "$THEOS"
+          fi
 
       - name: Setup iOS SDK
         run: |
-          # 下载 iOS SDK (使用开源的 sdks 仓库)
-          git clone --depth 1 https://github.com/theos/sdks.git $THEOS/sdks
+          if [ ! -d "$THEOS/sdks" ]; then
+            git clone --depth 1 https://github.com/theos/sdks.git "$THEOS/sdks"
+          fi
 
       - name: Build dylib
         run: |
-          export THEOS=~/theos
-          make clean
+          make clean || true
           make
 
       - name: Upload artifact
