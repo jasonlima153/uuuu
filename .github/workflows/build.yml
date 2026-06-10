@@ -7,12 +7,12 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
-env:
-  THEOS: ${{ github.workspace }}/theos
-
 jobs:
   build:
     runs-on: macos-latest
+
+    env:
+      THEOS: /Users/runner/theos
 
     steps:
       - name: Checkout repository
@@ -21,14 +21,13 @@ jobs:
       - name: Cache Theos
         uses: actions/cache@v4
         with:
-          path: theos
-          key: theos-${{ runner.os }}-v1
+          path: /Users/runner/theos
+          key: theos-macos-v2
 
       - name: Setup Theos
         run: |
           if [ ! -d "$THEOS/bin" ]; then
             bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
-            mv ~/theos "$THEOS"
           fi
 
       - name: Setup iOS SDK
