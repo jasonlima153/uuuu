@@ -15,6 +15,6 @@ UUUTalkFix_FILES = Tweak.x UUUKeychainHook.m fishhook.c
 UUUTalkFix_FRAMEWORKS = UIKit Foundation Security UserNotifications AudioToolbox AVFoundation
 
 # 开启 ARC
-UUUTalkFix_CFLAGS = -fobjc-arc
+UUUTalkFix_CFLAGS = -fobjc-arc -Wno-arc-performSelector-leaks
 
 include $(THEOS_MAKE_PATH)/tweak.mk
