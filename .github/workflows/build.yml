@@ -18,22 +18,28 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Cache Theos
+      - name: Cache Theos + SDK
         uses: actions/cache@v4
         with:
           path: /Users/runner/theos
-          key: theos-macos-v2
+          key: theos-sdk-macos-v3
 
-      - name: Setup Theos
+      - name: Install Theos (git clone, no API)
         run: |
           if [ ! -d "$THEOS/bin" ]; then
-            bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
+            git clone --recursive https://github.com/theos/theos.git "$THEOS"
           fi
+          echo "$THEOS/bin" >> $GITHUB_PATH
 
-      - name: Setup iOS SDK
+      - name: Install iOS SDK manually
         run: |
-          if [ ! -d "$THEOS/sdks" ]; then
-            git clone --depth 1 https://github.com/theos/sdks.git "$THEOS/sdks"
+          if [ ! -d "$THEOS/sdks/iPhoneOS.sdk" ]; then
+            mkdir -p "$THEOS/sdks"
+            cd "$THEOS/sdks"
+            curl -LO https://github.com/theos/sdks/raw/master/iPhoneOS16.5.sdk.tar.xz
+            tar -xJf iPhoneOS16.5.sdk.tar.xz
+            rm iPhoneOS16.5.sdk.tar.xz
+            ln -sf iPhoneOS16.5.sdk iPhoneOS.sdk
           fi
 
       - name: Build dylib
