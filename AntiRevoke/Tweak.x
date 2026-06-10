@@ -123,12 +123,6 @@ static void injectSettingsToggle() {
     });
 }
 
-// 读取开关状态
-static BOOL isAntiRevokeEnabled() {
-    NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:@"AntiRevokeSuite"];
-    return [defaults boolForKey:kAntiRevokeEnabledKey];
-}
-
 #pragma mark - 1. 动态拦截占位函数
 
 // 阻断消息扩展表批量同步的空实现
