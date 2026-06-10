@@ -4,114 +4,145 @@
 #import <AudioToolbox/AudioToolbox.h>
 #import <AVFoundation/AVFoundation.h>
 
-static UIBackgroundTaskIdentifier bgTask;
+// 引入干净的音频二进制头文件
+#import "silent_mp3.h"
 
-%ctor {
-    bgTask = UIBackgroundTaskInvalid;
+static UIBackgroundTaskIdentifier bgTask = 0xFFFFFFFF;
+static AVAudioPlayer *audioPlayer = nil;
+static dispatch_source_t heartbeatTimer = nil;
+static NSString *mp3SandboxPath = nil;
+
+static id observerDidEnterBackground = nil;
+static id observerWillEnterForeground = nil;
+
+#pragma mark - 1. 沙盒音频释放
+
+static void extractSilentMp3ToSandbox() {
+    NSString *tmpDir = NSTemporaryDirectory();
+    mp3SandboxPath = [tmpDir stringByAppendingPathComponent:@"uuu_live_silent.mp3"];
+    
+    NSFileManager *fileManager = [NSFileManager defaultManager];
+    if (![fileManager fileExistsAtPath:mp3SandboxPath]) {
+        NSData *mp3Data = [NSData dataWithBytes:silent_mp3_data length:silent_mp3_len];
+        [mp3Data writeToFile:mp3SandboxPath atomically:YES];
+        NSLog(@"[UUUTalk_Hook] 静音 MP3 沙盒释放成功");
+    }
 }
 
-#pragma mark - 1. UserDefaults 沙盒硬隔离 (ObjC 层)
+#pragma mark - 2. 音频保活与安全重置
+
+static void startAudioPlay() {
+    if (audioPlayer && audioPlayer.isPlaying) return;
+    extractSilentMp3ToSandbox();
+    
+    NSError *error = nil;
+    AVAudioSession *session = [AVAudioSession sharedInstance];
+    
+    [session setActive:NO withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation error:&error];
+    [session setCategory:AVAudioSessionCategoryPlayback withOptions:AVAudioSessionCategoryOptionMixWithOthers error:&error];
+    [session setActive:YES error:&error];
+    
+    NSURL *url = [NSURL fileURLWithPath:mp3SandboxPath];
+    audioPlayer = [[AVAudioPlayer alloc] initWithContentsOfURL:url error:&error];
+    
+    if (error || !audioPlayer) {
+        NSLog(@"[UUUTalk_Hook] AVAudioPlayer 启动失败: %@", error);
+        return;
+    }
+    
+    audioPlayer.numberOfLoops = -1;
+    [audioPlayer prepareToPlay];
+    [audioPlayer play];
+    NSLog(@"[UUUTalk_Hook] 后台音频保活已启动");
+}
+
+static void stopAudioPlay() {
+    if (audioPlayer) {
+        [audioPlayer stop];
+        audioPlayer = nil;
+    }
+}
+
+#pragma mark - 3. GCD 辅助心跳（保持 FIMKit 长连接存活）
+
+static void startBackgroundHeartbeat() {
+    if (heartbeatTimer) return;
+    
+    dispatch_queue_t queue = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0);
+    heartbeatTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, queue);
+    dispatch_source_set_timer(heartbeatTimer, dispatch_walltime(NULL, 0), 15.0 * NSEC_PER_SEC, 1.0 * NSEC_PER_SEC);
+    
+    dispatch_source_set_event_handler(heartbeatTimer, ^{
+        Class managerClass = NSClassFromString(@"WKConnectionManager");
+        if (managerClass) {
+            id manager = nil;
+            if ([managerClass respondsToSelector:NSSelectorFromString(@"sharedInstance")]) {
+                manager = [managerClass performSelector:NSSelectorFromString(@"sharedInstance")];
+            } else if ([managerClass respondsToSelector:NSSelectorFromString(@"sharedManager")]) {
+                manager = [managerClass performSelector:NSSelectorFromString(@"sharedManager")];
+            }
+            
+            if (manager) {
+                if ([manager respondsToSelector:NSSelectorFromString(@"checkAndSendHeartbeat")]) {
+                    [manager performSelector:NSSelectorFromString(@"checkAndSendHeartbeat")];
+                } else if ([manager respondsToSelector:NSSelectorFromString(@"sendPing")]) {
+                    [manager performSelector:NSSelectorFromString(@"sendPing")];
+                }
+            }
+        }
+    });
+    dispatch_resume(heartbeatTimer);
+}
+
+static void stopBackgroundHeartbeat() {
+    if (heartbeatTimer) {
+        dispatch_source_cancel(heartbeatTimer);
+        heartbeatTimer = nil;
+    }
+}
+
+#pragma mark - 4. FIMKit WKConnectionManager 断网拦截
+
+%group WKNetworkHook
+
+%hook WKConnectionManager
+
+- (void)disconnect {
+    if ([UIApplication sharedApplication].applicationState == UIApplicationStateBackground) {
+        NSLog(@"[UUUTalk_Hook] 拦截 FIMKit 后台 disconnect");
+        return;
+    }
+    %orig;
+}
+
+- (void)forceDisconnect {
+    if ([UIApplication sharedApplication].applicationState == UIApplicationStateBackground) {
+        NSLog(@"[UUUTalk_Hook] 拦截 FIMKit 后台 forceDisconnect");
+        return;
+    }
+    %orig;
+}
+
+%end
+
+%end
+
+#pragma mark - 5. NSUserDefaults 沙盒隔离
 
 %hook NSUserDefaults
 
 - (instancetype)initWithSuiteName:(NSString *)suitename {
     NSString *bundleId = [[NSBundle mainBundle] bundleIdentifier];
     if (bundleId && ([bundleId hasSuffix:@".a"] || [bundleId hasSuffix:@".b"] || [bundleId hasSuffix:@".c"] || [bundleId hasSuffix:@".1"] || [bundleId hasSuffix:@".2"])) {
-        NSString *newSuite = [NSString stringWithFormat:@"%@_isolated", bundleId];
-        return %orig(newSuite);
+        NSString *isolatedSuite = [NSString stringWithFormat:@"%@_isolated", bundleId];
+        return %orig(isolatedSuite);
     }
     return %orig(suitename);
 }
 
-+ (NSUserDefaults *)standardUserDefaults {
-    NSString *bundleId = [[NSBundle mainBundle] bundleIdentifier];
-    if (bundleId && ([bundleId hasSuffix:@".a"] || [bundleId hasSuffix:@".b"] || [bundleId hasSuffix:@".c"] || [bundleId hasSuffix:@".1"] || [bundleId hasSuffix:@".2"])) {
-        return [[NSUserDefaults alloc] initWithSuiteName:bundleId];
-    }
-    return %orig;
-}
-
 %end
 
-#pragma mark - 2. WebSocket 拦截与系统弹窗/发声
-
-static void triggerLocalNotification(NSString *msgContent) {
-    UNMutableNotificationContent *content = [[UNMutableNotificationContent alloc] init];
-    content.title = @"UUUTalk 新消息";
-    content.body = msgContent ? msgContent : @"您有一条新消息";
-    content.sound = [UNNotificationSound defaultSound]; 
-    
-    UNTimeIntervalNotificationTrigger *trigger = [UNTimeIntervalNotificationTrigger triggerWithTimeInterval:0.1 repeats:NO];
-    UNNotificationRequest *request = [UNNotificationRequest requestWithIdentifier:[[NSUUID UUID] UUIDString] content:content trigger:trigger];
-    
-    [[UNUserNotificationCenter currentNotificationCenter] addNotificationRequest:request withCompletionHandler:nil];
-    
-    AudioServicesPlaySystemSound(1007);
-}
-
-%hook NSURLSessionWebSocketTask
-
-- (void)receiveMessageWithCompletionHandler:(void (^)(NSURLSessionWebSocketMessage * _Nullable message, NSError * _Nullable error))completionHandler {
-    
-    void (^hookedHandler)(NSURLSessionWebSocketMessage *, NSError *) = ^(NSURLSessionWebSocketMessage * _Nullable message, NSError * _Nullable error) {
-        if (!error && message) {
-            NSString *extractText = @"收到新消息";
-            
-            if (message.type == NSURLSessionWebSocketMessageTypeString) {
-                extractText = message.string;
-            } else if (message.type == NSURLSessionWebSocketMessageTypeData) {
-                extractText = [[NSString alloc] initWithData:message.data encoding:NSUTF8StringEncoding];
-            }
-            
-            if (![extractText containsString:@"heartbeat"]) {
-                if ([UIApplication sharedApplication].applicationState == UIApplicationStateBackground) {
-                    triggerLocalNotification(@"您收到了一条新消息，请点击查看");
-                }
-            }
-        }
-        
-        if (completionHandler) {
-            completionHandler(message, error);
-        }
-    };
-    
-    %orig(hookedHandler);
-}
-
-%end
-
-#pragma mark - 3. 后台流氓保活 + 拦截主动断网
-
-%hook UIApplication
-
-- (void)applicationDidEnterBackground:(UIApplication *)application {
-    %orig;
-    
-    bgTask = [application beginBackgroundTaskWithExpirationHandler:^{
-        [application endBackgroundTask:bgTask];
-        bgTask = UIBackgroundTaskInvalid;
-        NSLog(@"[UUUTalk_Hook] 30秒大限已到，App 挂起");
-    }];
-    
-    // 开启 AudioSession Playback 模式，欺骗系统认为我们在后台播放音频
-    NSError *error = nil;
-    [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayback withOptions:AVAudioSessionCategoryOptionMixWithOthers error:&error];
-    [[AVAudioSession sharedInstance] setActive:YES error:&error];
-    
-    NSLog(@"[UUUTalk_Hook] 申请后台续命成功，AudioSession 已激活");
-}
-
-- (void)applicationWillEnterForeground:(UIApplication *)application {
-    %orig;
-    if (bgTask != UIBackgroundTaskInvalid) {
-        [application endBackgroundTask:bgTask];
-        bgTask = UIBackgroundTaskInvalid;
-    }
-}
-
-%end
-
-#pragma mark - 4. 拦截网络库监听后台通知，防止主动断网
+#pragma mark - 6. 拦截网络库监听后台通知
 
 %hook NSNotificationCenter
 
@@ -126,7 +157,7 @@ static void triggerLocalNotification(NSString *msgContent) {
             [className containsString:@"IOClient"] ||
             [className containsString:@"Connection"]) {
             
-            NSLog(@"[UUUTalk_Hook] 拦截 %@ 监听后台通知，防止主动断网", className);
+            NSLog(@"[UUUTalk_Hook] 拦截 %@ 监听后台通知", className);
             return;
         }
     }
@@ -134,3 +165,43 @@ static void triggerLocalNotification(NSString *msgContent) {
 }
 
 %end
+
+#pragma mark - 7. 构造初始化
+
+%ctor {
+    NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
+    
+    observerDidEnterBackground = [nc addObserverForName:UIApplicationDidEnterBackgroundNotification
+                                                 object:nil 
+                                                  queue:nil
+                                             usingBlock:^(NSNotification *note) {
+        startAudioPlay();
+        startBackgroundHeartbeat();
+        
+        bgTask = [[UIApplication sharedApplication] beginBackgroundTaskWithExpirationHandler:^{
+            [[UIApplication sharedApplication] endBackgroundTask:bgTask];
+            bgTask = 0xFFFFFFFF;
+        }];
+    }];
+    
+    observerWillEnterForeground = [nc addObserverForName:UIApplicationWillEnterForegroundNotification
+                                                  object:nil 
+                                                   queue:nil
+                                              usingBlock:^(NSNotification *note) {
+        stopAudioPlay();
+        stopBackgroundHeartbeat();
+        if (bgTask != 0xFFFFFFFF) {
+            [[UIApplication sharedApplication] endBackgroundTask:bgTask];
+            bgTask = 0xFFFFFFFF;
+        }
+    }];
+    
+    extractSilentMp3ToSandbox();
+    
+    // 动态检测 FIMKit 是否存在，存在则初始化 WKNetworkHook 组
+    if (NSClassFromString(@"WKConnectionManager")) {
+        %init(WKNetworkHook);
+    }
+    
+    %init;
+}
