@@ -2,6 +2,9 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
+// 设置开关持久化 Key
+static NSString *const kAntiRevokeEnabledKey = @"AntiRevoke_Enabled";
+
 // 全局通知生命周期监听销毁者
 // 开关状态变更回调 helper 类
 @interface AntiRevokeToggleHelper : NSObject
@@ -18,9 +21,6 @@
 @end
 
 static id launchObserver = nil;
-
-// 设置开关持久化 Key
-static NSString *const kAntiRevokeEnabledKey = @"AntiRevoke_Enabled";
 
 #pragma mark - 0. 设置页面开关 UI
 
