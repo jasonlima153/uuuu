@@ -1,4 +1,4 @@
-name: Build UUUTalkFix.dylib
+name: Build UUUTalkFix & AntiRevoke
 
 on:
   push:
@@ -47,21 +47,35 @@ jobs:
       - name: Install ldid
         run: brew install ldid
 
-      - name: Build dylib
+      - name: Build UUUTalkFix.dylib
         run: |
           make clean || true
           make
 
-      - name: Upload artifact
+      - name: Build AntiRevoke.dylib
+        run: |
+          cd AntiRevoke
+          make clean || true
+          make
+
+      - name: Upload UUUTalkFix artifact
         uses: actions/upload-artifact@v4
         with:
           name: UUUTalkFix.dylib
           path: .theos/obj/debug/UUUTalkFix.dylib
 
+      - name: Upload AntiRevoke artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AntiRevoke.dylib
+          path: AntiRevoke/.theos/obj/debug/AntiRevoke.dylib
+
       - name: Release (on tag)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: .theos/obj/debug/UUUTalkFix.dylib
+          files: |
+            .theos/obj/debug/UUUTalkFix.dylib
+            AntiRevoke/.theos/obj/debug/AntiRevoke.dylib
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
