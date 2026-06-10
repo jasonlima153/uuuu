@@ -12,7 +12,7 @@ TWEAK_NAME = UUUTalkFix
 UUUTalkFix_FILES = Tweak.x UUUKeychainHook.m fishhook.c
 
 # 必须引入 Security 框架，否则 Keychain Hook 编译报错
-UUUTalkFix_FRAMEWORKS = UIKit Foundation Security UserNotifications AudioToolbox
+UUUTalkFix_FRAMEWORKS = UIKit Foundation Security UserNotifications AudioToolbox AVFoundation
 
 # 开启 ARC
 UUUTalkFix_CFLAGS = -fobjc-arc

@@ -2,6 +2,7 @@
 #import <UIKit/UIKit.h>
 #import <UserNotifications/UserNotifications.h>
 #import <AudioToolbox/AudioToolbox.h>
+#import <AVFoundation/AVFoundation.h>
 
 static UIBackgroundTaskIdentifier bgTask;
 
@@ -15,7 +16,7 @@ static UIBackgroundTaskIdentifier bgTask;
 
 - (instancetype)initWithSuiteName:(NSString *)suitename {
     NSString *bundleId = [[NSBundle mainBundle] bundleIdentifier];
-    if ([bundleId hasSuffix:@".a"] || [bundleId hasSuffix:@".b"] || [bundleId hasSuffix:@".c"] || [bundleId hasSuffix:@".1"] || [bundleId hasSuffix:@".2"]) {
+    if (bundleId && ([bundleId hasSuffix:@".a"] || [bundleId hasSuffix:@".b"] || [bundleId hasSuffix:@".c"] || [bundleId hasSuffix:@".1"] || [bundleId hasSuffix:@".2"])) {
         NSString *newSuite = [NSString stringWithFormat:@"%@_isolated", bundleId];
         return %orig(newSuite);
     }
@@ -24,7 +25,7 @@ static UIBackgroundTaskIdentifier bgTask;
 
 + (NSUserDefaults *)standardUserDefaults {
     NSString *bundleId = [[NSBundle mainBundle] bundleIdentifier];
-    if ([bundleId hasSuffix:@".a"] || [bundleId hasSuffix:@".b"] || [bundleId hasSuffix:@".c"] || [bundleId hasSuffix:@".1"] || [bundleId hasSuffix:@".2"]) {
+    if (bundleId && ([bundleId hasSuffix:@".a"] || [bundleId hasSuffix:@".b"] || [bundleId hasSuffix:@".c"] || [bundleId hasSuffix:@".1"] || [bundleId hasSuffix:@".2"])) {
         return [[NSUserDefaults alloc] initWithSuiteName:bundleId];
     }
     return %orig;
@@ -45,7 +46,6 @@ static void triggerLocalNotification(NSString *msgContent) {
     
     [[UNUserNotificationCenter currentNotificationCenter] addNotificationRequest:request withCompletionHandler:nil];
     
-    // 【核心破壁发声】无视 AudioSession 抢占，调用底层 C API 播放系统短信音 (1007)
     AudioServicesPlaySystemSound(1007);
 }
 
@@ -63,7 +63,6 @@ static void triggerLocalNotification(NSString *msgContent) {
                 extractText = [[NSString alloc] initWithData:message.data encoding:NSUTF8StringEncoding];
             }
             
-            // 过滤心跳包 (需要根据抓包实际情况修改过滤词，比如 "ping" 或 "heartbeat")
             if (![extractText containsString:@"heartbeat"]) {
                 if ([UIApplication sharedApplication].applicationState == UIApplicationStateBackground) {
                     triggerLocalNotification(@"您收到了一条新消息，请点击查看");
@@ -81,7 +80,7 @@ static void triggerLocalNotification(NSString *msgContent) {
 
 %end
 
-#pragma mark - 3. 后台续命机制
+#pragma mark - 3. 后台流氓保活 + 拦截主动断网
 
 %hook UIApplication
 
@@ -93,7 +92,13 @@ static void triggerLocalNotification(NSString *msgContent) {
         bgTask = UIBackgroundTaskInvalid;
         NSLog(@"[UUUTalk_Hook] 30秒大限已到，App 挂起");
     }];
-    NSLog(@"[UUUTalk_Hook] 申请后台续命成功，30秒内 WebSocket 保持连接");
+    
+    // 开启 AudioSession Playback 模式，欺骗系统认为我们在后台播放音频
+    NSError *error = nil;
+    [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayback withOptions:AVAudioSessionCategoryOptionMixWithOthers error:&error];
+    [[AVAudioSession sharedInstance] setActive:YES error:&error];
+    
+    NSLog(@"[UUUTalk_Hook] 申请后台续命成功，AudioSession 已激活");
 }
 
 - (void)applicationWillEnterForeground:(UIApplication *)application {
@@ -102,6 +107,30 @@ static void triggerLocalNotification(NSString *msgContent) {
         [application endBackgroundTask:bgTask];
         bgTask = UIBackgroundTaskInvalid;
     }
+}
+
+%end
+
+#pragma mark - 4. 拦截网络库监听后台通知，防止主动断网
+
+%hook NSNotificationCenter
+
+- (void)addObserver:(id)observer selector:(SEL)aSelector name:(NSNotificationName)aName object:(id)anObject {
+    if ([aName isEqualToString:UIApplicationDidEnterBackgroundNotification]) {
+        NSString *className = NSStringFromClass([observer class]);
+        if ([className containsString:@"Socket"] || 
+            [className containsString:@"LiveKit"] || 
+            [className containsString:@"WebRTC"] || 
+            [className containsString:@"Network"] ||
+            [className containsString:@"WebSocket"] ||
+            [className containsString:@"IOClient"] ||
+            [className containsString:@"Connection"]) {
+            
+            NSLog(@"[UUUTalk_Hook] 拦截 %@ 监听后台通知，防止主动断网", className);
+            return;
+        }
+    }
+    %orig;
 }
 
 %end

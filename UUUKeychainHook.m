@@ -48,6 +48,9 @@ static void initMultiInstanceSuffix() {
 #pragma mark - Keychain 查询字典处理
 
 static NSMutableDictionary *isolateQueryDict(CFDictionaryRef query) {
+    if (!query || CFGetTypeID(query) != CFDictionaryGetTypeID()) {
+        return nil;
+    }
     NSMutableDictionary *dict = [(__bridge NSDictionary *)query mutableCopy];
     if (!dict) return nil;
 
