@@ -333,15 +333,29 @@ static void performDynamicAntiRevoke() {
         [alert addAction:[UIAlertAction actionWithTitle:@"\u786E\u5B9A" style:UIAlertActionStyleDefault handler:nil]];
         
         // 兼容不同 iOS 版本获取 rootViewController
-        UIViewController *rootVC = [UIApplication sharedApplication].keyWindow.rootViewController;
-        if (!rootVC) {
-            rootVC = [UIApplication sharedApplication].connectedScenes
-                .allObjects
-                .firstObject
-                .delegate
-                .window
-                .rootViewController;
+        UIViewController *rootVC = nil;
+        UIWindow *keyWindow = nil;
+        
+        // iOS 13+ UIScene 方式
+        if (@available(iOS 13.0, *)) {
+            for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+                if (scene.activationState == UISceneActivationStateForegroundActive && [scene.delegate isKindOfClass:[UIWindowSceneDelegate class]]) {
+                    UIWindowScene *windowScene = (UIWindowScene *)scene;
+                    keyWindow = windowScene.keyWindow;
+                    break;
+                }
+            }
         }
+        
+        // 兜底
+        if (!keyWindow) {
+            #pragma clang diagnostic push
+            #pragma clang diagnostic ignored "-Wdeprecated-declarations"
+            keyWindow = [UIApplication sharedApplication].keyWindow;
+            #pragma clang diagnostic pop
+        }
+        
+        rootVC = keyWindow.rootViewController;
         if (rootVC) {
             [rootVC presentViewController:alert animated:YES completion:nil];
         }
