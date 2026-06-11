@@ -372,13 +372,10 @@ static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) 
 
 %end
 
-#pragma mark - 5. 模块初始化 (单点 %init)
+#pragma mark - 5. 模块初始化
 
 %ctor {
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        if (NSClassFromString(@"WKConversationVC")) {
-            %init(UUUVoiceFunHooks);
-        }
-    });
+    if (NSClassFromString(@"WKConversationVC")) {
+        %init(UUUVoiceFunHooks);
+    }
 }
