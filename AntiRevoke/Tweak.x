@@ -104,14 +104,14 @@ static void showAntiRevokeToast() {
 #pragma mark - 3. 生命周期绑定
 
 %ctor {
-    if (NSClassFromString(@"WKSystemMessageHandler")) {
+    if (NSClassFromString(@"WKMessageDB")) {
         %init(UUUTalkAntiRevoke);
     } else {
-        [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidFinishLaunchingNotification
+        id obs = [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidFinishLaunchingNotification
                                                          object:nil 
                                                           queue:nil
                                                      usingBlock:^(NSNotification *note) {
-            [[NSNotificationCenter defaultCenter] removeObserver:self];
+            [[NSNotificationCenter defaultCenter] removeObserver:obs];
             %init(UUUTalkAntiRevoke);
         }];
     }
