@@ -127,11 +127,13 @@ static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) 
     });
 }
 
-#pragma mark - 3. Plist 详情列表页 (带 SILK 拦截)
+#pragma mark - 3. Plist 详情列表页 (带 SILK 拦截 + 滑动删除 + 试听验毒)
 
 @interface UUUVoiceFunDetailViewController : UITableViewController
-@property (nonatomic, strong) NSArray *voiceList;
+@property (nonatomic, strong) NSMutableArray *voiceList;
 @property (nonatomic, strong) id currentChannel;
+@property (nonatomic, strong) NSString *plistPath;
+@property (nonatomic, strong) AVAudioPlayer *audioPlayer;
 @end
 
 @implementation UUUVoiceFunDetailViewController
@@ -141,6 +143,10 @@ static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) 
     self.tableView.rowHeight = 55;
     self.view.backgroundColor = [UIColor whiteColor];
     self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"< 返回" style:UIBarButtonItemStylePlain target:self action:@selector(close)];
+
+    // 强制音频通道，无视静音键
+    [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayback error:nil];
+    [[AVAudioSession sharedInstance] setActive:YES error:nil];
 }
 
 - (void)close { [self.navigationController popViewControllerAnimated:YES]; }
@@ -165,15 +171,79 @@ static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) 
     NSDictionary *voiceDict = self.voiceList[indexPath.row];
     cell.textLabel.text = voiceDict[@"name"];
     cell.textLabel.font = [UIFont systemFontOfSize:16];
-    cell.detailTextLabel.text = [NSString stringWithFormat:@"%@ 秒", voiceDict[@"duration"]];
+    cell.detailTextLabel.text = [NSString stringWithFormat:@"%@ 秒  (点击试听)", voiceDict[@"duration"]];
     cell.detailTextLabel.textColor = [UIColor grayColor];
-    cell.imageView.image = [UIImage systemImageNamed:@"bubble.left.and.bubble.right"];
+    cell.imageView.image = [UIImage systemImageNamed:@"play.circle"];
 
     ((UIButton *)cell.accessoryView).tag = indexPath.row;
     return cell;
 }
 
-- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath { [tableView deselectRowAtIndexPath:indexPath animated:YES]; }
+// 左滑删除单条语音
+- (BOOL)tableView:(UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)indexPath { return YES; }
+- (void)tableView:(UITableView *)tableView commitEditingStyle:(UITableViewCellEditingStyle)editingStyle forRowAtIndexPath:(NSIndexPath *)indexPath {
+    if (editingStyle == UITableViewCellEditingStyleDelete) {
+        [self.voiceList removeObjectAtIndex:indexPath.row];
+        [self.voiceList writeToFile:self.plistPath atomically:YES];
+        [tableView deleteRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationFade];
+    }
+}
+
+// 点击整行试听排错
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+
+    NSDictionary *voiceDict = self.voiceList[indexPath.row];
+    NSData *amrData = voiceDict[@"audioData"];
+
+    if (amrData && amrData.length > 0) {
+        NSString *tmpDir = NSTemporaryDirectory();
+        NSString *tmpAmr = [tmpDir stringByAppendingPathComponent:@"debug_play.amr"];
+        NSString *tmpWav = [tmpDir stringByAppendingPathComponent:@"debug_play.wav"];
+        [[NSFileManager defaultManager] removeItemAtPath:tmpAmr error:nil];
+        [[NSFileManager defaultManager] removeItemAtPath:tmpWav error:nil];
+        [amrData writeToFile:tmpAmr atomically:YES];
+
+        // 调用底层 DecodeAmrToWav 解码
+        Class converterCls = NSClassFromString(@"VoiceConverter");
+        SEL decSel = NSSelectorFromString(@"DecodeAmrToWav:wavSavePath:sampleRateType:");
+        if ([converterCls respondsToSelector:decSel]) {
+            NSMethodSignature *sig = [converterCls methodSignatureForSelector:decSel];
+            NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+            [inv setTarget:converterCls];
+            [inv setSelector:decSel];
+            [inv setArgument:&tmpAmr atIndex:2];
+            [inv setArgument:&tmpWav atIndex:3];
+            int type = 0;
+            [inv setArgument:&type atIndex:4];
+            [inv invoke];
+
+            NSData *wavData = [NSData dataWithContentsOfFile:tmpWav];
+            if (wavData && wavData.length > 0) {
+                NSError *err = nil;
+                self.audioPlayer = [[AVAudioPlayer alloc] initWithData:wavData error:&err];
+                [self.audioPlayer play];
+
+                UIAlertController *toast = [UIAlertController alertControllerWithTitle:@"正在试听"
+                    message:@"如果听不到声音，说明 AMR 是损坏的！"
+                    preferredStyle:UIAlertControllerStyleAlert];
+                [self presentViewController:toast animated:YES completion:nil];
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                    [toast dismissViewControllerAnimated:YES completion:nil];
+                });
+            } else {
+                UIAlertController *errAlert = [UIAlertController alertControllerWithTitle:@"试听失败"
+                    message:@"解码生成的 WAV 为空！AMR 文件已损坏。"
+                    preferredStyle:UIAlertControllerStyleAlert];
+                [errAlert addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleCancel handler:nil]];
+                [self presentViewController:errAlert animated:YES completion:nil];
+            }
+        } else {
+            NSLog(@"[UUUVoiceFun] DecodeAmrToWav 不存在！扫描 VoiceConverter...");
+            dumpMethodsForClass(converterCls, YES);
+        }
+    }
+}
 
 - (void)sendButtonClicked:(UIButton *)sender {
     NSInteger row = sender.tag;
@@ -183,7 +253,7 @@ static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) 
     NSData *audioData = voiceDict[@"audioData"];
     NSInteger duration = [voiceDict[@"duration"] integerValue] ?: 1;
 
-    // SILK 格式拦截：微信提取的 Plist 含 SILK 编码，服务器不认
+    // SILK 格式拦截
     if (audioData.length > 5) {
         const char *bytes = audioData.bytes;
         if (bytes[0] == 0x02 && bytes[1] == '#' && bytes[2] == '!') {
@@ -428,6 +498,18 @@ static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) 
     return cell;
 }
 
+// 左滑删除整张 Plist
+- (BOOL)tableView:(UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)indexPath { return YES; }
+- (void)tableView:(UITableView *)tableView commitEditingStyle:(UITableViewCellEditingStyle)editingStyle forRowAtIndexPath:(NSIndexPath *)indexPath {
+    if (editingStyle == UITableViewCellEditingStyleDelete) {
+        NSString *fileName = self.dataSource[indexPath.row];
+        NSString *fullPath = [self.basePath stringByAppendingPathComponent:fileName];
+        [[NSFileManager defaultManager] removeItemAtPath:fullPath error:nil];
+        [self.dataSource removeObjectAtIndex:indexPath.row];
+        [tableView deleteRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationFade];
+    }
+}
+
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
     NSString *fileName = self.dataSource[indexPath.row];
@@ -470,6 +552,7 @@ static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) 
             [normalizedList sortUsingDescriptors:@[[NSSortDescriptor sortDescriptorWithKey:@"name" ascending:YES]]];
             UUUVoiceFunDetailViewController *detailVC = [[UUUVoiceFunDetailViewController alloc] init];
             detailVC.voiceList = normalizedList;
+            detailVC.plistPath = fullPath;
             detailVC.currentChannel = self.currentChannel;
             detailVC.title = [fileName stringByDeletingPathExtension];
             [self.navigationController pushViewController:detailVC animated:YES];
