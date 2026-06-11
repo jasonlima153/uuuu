@@ -1,4 +1,4 @@
-name: Build UUUTalkFix & AntiRevoke
+name: Build UUUTalkFix & AntiRevoke & FunVoice
 
 on:
   push:
@@ -58,6 +58,12 @@ jobs:
           make clean || true
           make
 
+      - name: Build FunVoice.dylib
+        run: |
+          cd FunVoice
+          make clean || true
+          make
+
       - name: Upload UUUTalkFix artifact
         uses: actions/upload-artifact@v4
         with:
@@ -70,6 +76,12 @@ jobs:
           name: AntiRevoke.dylib
           path: AntiRevoke/.theos/obj/debug/AntiRevoke.dylib
 
+      - name: Upload FunVoice artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FunVoice.dylib
+          path: FunVoice/.theos/obj/debug/FunVoice.dylib
+
       - name: Release (on tag)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
@@ -77,5 +89,6 @@ jobs:
           files: |
             .theos/obj/debug/UUUTalkFix.dylib
             AntiRevoke/.theos/obj/debug/AntiRevoke.dylib
+            FunVoice/.theos/obj/debug/FunVoice.dylib
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
