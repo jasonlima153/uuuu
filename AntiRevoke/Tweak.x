@@ -101,7 +101,7 @@ static void showAntiRevokeToast() {
 #pragma mark - 3. 生命周期绑定
 
 %ctor {
-    id obs = [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidFinishLaunchingNotification
+    __block id obs = [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidFinishLaunchingNotification
                                                      object:nil 
                                                       queue:nil
                                                  usingBlock:^(NSNotification *note) {
