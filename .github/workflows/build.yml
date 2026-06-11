@@ -61,10 +61,14 @@ jobs:
       - name: Verify FunVoice source
         run: |
           cd FunVoice
+          echo "=== Git commit ==="
+          git log -1 --oneline
           echo "=== Tweak.x last 30 lines ==="
           tail -30 Tweak.x
           echo "=== Tweak.x line count ==="
           wc -l Tweak.x
+          echo "=== Search for stray %init ==="
+          grep -n "%init" Tweak.x || echo "No bare %init found"
 
       - name: Build FunVoice.dylib
         run: |
