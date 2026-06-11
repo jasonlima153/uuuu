@@ -37,11 +37,11 @@ static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) 
     }
     NSLog(@"[UUUVoiceFun] Channel 真实类型: %@", NSStringFromClass([channel class]));
 
-    // 【修复 JSON 崩溃】：波形必须是 NSArray，NSData 会导致底层 JSON 序列化异常
-    NSMutableArray *safeWaveform = [NSMutableArray arrayWithCapacity:100];
+    // 波形数据：运行时 Scanner 会验证真实类型，当前使用 NSData
+    NSMutableData *dummyWaveform = [NSMutableData dataWithCapacity:100];
     for (int i = 0; i < 100; i++) {
         uint8_t val = (uint8_t)(sin(i * 0.2) * 20 + 30 + arc4random_uniform(10));
-        [safeWaveform addObject:@(val)];
+        [dummyWaveform appendBytes:&val length:1];
     }
 
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -63,7 +63,7 @@ static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) 
                 [inv setSelector:initSel];
                 [inv setArgument:&amrData atIndex:2];
                 [inv setArgument:&duration atIndex:3];
-                [inv setArgument:&safeWaveform atIndex:4];
+                [inv setArgument:&dummyWaveform atIndex:4];
                 [inv invoke];
                 __unsafe_unretained id ret = nil;
                 [inv getReturnValue:&ret];
@@ -77,7 +77,7 @@ static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) 
                 [inv setSelector:initSel];
                 [inv setArgument:&amrData atIndex:2];
                 [inv setArgument:&duration atIndex:3];
-                [inv setArgument:&safeWaveform atIndex:4];
+                [inv setArgument:&dummyWaveform atIndex:4];
                 [inv invoke];
                 __unsafe_unretained id ret = nil;
                 [inv getReturnValue:&ret];
