@@ -104,22 +104,11 @@ static void showAntiRevokeToast() {
 #pragma mark - 3. 生命周期绑定
 
 %ctor {
-    static BOOL initialized = NO;
-    if (initialized) return;
-    
-    if (NSClassFromString(@"WKMessageDB")) {
+    id obs = [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidFinishLaunchingNotification
+                                                     object:nil 
+                                                      queue:nil
+                                                 usingBlock:^(NSNotification *note) {
+        [[NSNotificationCenter defaultCenter] removeObserver:obs];
         %init(UUUTalkAntiRevoke);
-        initialized = YES;
-    } else {
-        id obs = [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidFinishLaunchingNotification
-                                                         object:nil 
-                                                          queue:nil
-                                                     usingBlock:^(NSNotification *note) {
-            [[NSNotificationCenter defaultCenter] removeObserver:obs];
-            if (!initialized) {
-                %init(UUUTalkAntiRevoke);
-                initialized = YES;
-            }
-        }];
-    }
+    }];
 }
