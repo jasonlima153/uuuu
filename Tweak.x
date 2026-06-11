@@ -51,9 +51,15 @@ static void startAudioPlay() {
     }
     
     audioPlayer.numberOfLoops = -1;
+    
+    // 降低 CPU 解码功耗
+    audioPlayer.enableRate = YES;
+    audioPlayer.rate = 0.5;
+    audioPlayer.volume = 0.01;
+    
     [audioPlayer prepareToPlay];
     [audioPlayer play];
-    NSLog(@"[UUUTalk_Hook] 后台音频保活已启动");
+    NSLog(@"[UUUTalk_Hook] 后台音频保活已启动 (低功耗模式)");
 }
 
 static void stopAudioPlay() {
@@ -68,9 +74,11 @@ static void stopAudioPlay() {
 static void startBackgroundHeartbeat() {
     if (heartbeatTimer) return;
     
-    dispatch_queue_t queue = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0);
+    dispatch_queue_t queue = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0);
     heartbeatTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, queue);
-    dispatch_source_set_timer(heartbeatTimer, dispatch_walltime(NULL, 0), 15.0 * NSEC_PER_SEC, 1.0 * NSEC_PER_SEC);
+    
+    // 3分钟心跳 + 15秒系统误差对齐，大幅降低基带天线功耗
+    dispatch_source_set_timer(heartbeatTimer, dispatch_walltime(NULL, 0), 180.0 * NSEC_PER_SEC, 15.0 * NSEC_PER_SEC);
     
     dispatch_source_set_event_handler(heartbeatTimer, ^{
         Class managerClass = NSClassFromString(@"WKConnectionManager");
