@@ -291,6 +291,63 @@ static void performDynamicAntiRevoke() {
 #pragma mark - 7. 构造初始化入口
 
 %ctor {
+    // 自检弹窗：启动 3 秒后显示 Hook 结果诊断
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        NSMutableString *debugInfo = [NSMutableString stringWithString:@"\u9632\u64A4\u56DE\u81EA\u68C0\u62A5\u544A\uFF1A\n"];
+        
+        if (NSClassFromString(@"WKMessageDB")) {
+            [debugInfo appendString:@"\u2705 \u627E\u5230 WKMessageDB\n"];
+        } else {
+            [debugInfo appendString:@"\u274C \u6CA1\u627E\u5230 WKMessageDB\n"];
+        }
+        
+        if (NSClassFromString(@"WKMessage")) {
+            [debugInfo appendString:@"\u2705 \u627E\u5230 WKMessage\n"];
+        } else {
+            [debugInfo appendString:@"\u274C \u6CA1\u627E\u5230 WKMessage\n"];
+        }
+        
+        if (NSClassFromString(@"WKMessageExtraDB")) {
+            [debugInfo appendString:@"\u2705 \u627E\u5230 WKMessageExtraDB\n"];
+        } else {
+            [debugInfo appendString:@"\u274C \u6CA1\u627E\u5230 WKMessageExtraDB\n"];
+        }
+        
+        Class dbClass = NSClassFromString(@"WKMessageDB");
+        if (dbClass && class_getInstanceMethod(dbClass, NSSelectorFromString(@"updateMessageRevoke:clientMsgNo:"))) {
+            [debugInfo appendString:@"\u2705 \u627E\u5230 updateMessageRevoke:clientMsgNo:\n"];
+        } else {
+            [debugInfo appendString:@"\u274C \u65B9\u6CD5 updateMessageRevoke \u7B7E\u540D\u9519\u8BEF\u6216\u4E0D\u5B58\u5728\n"];
+        }
+        
+        Class msgClass = NSClassFromString(@"WKMessage");
+        if (msgClass && class_getInstanceMethod(msgClass, NSSelectorFromString(@"content"))) {
+            [debugInfo appendString:@"\u2705 \u627E\u5230 WKMessage.content\n"];
+        } else {
+            [debugInfo appendString:@"\u274C \u65B9\u6CD5 WKMessage.content \u7B7E\u540D\u9519\u8BEF\u6216\u4E0D\u5B58\u5728\n"];
+        }
+        
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"AntiRevoke Debug"
+                                                                       message:debugInfo
+                                                                preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"\u786E\u5B9A" style:UIAlertActionStyleDefault handler:nil]];
+        
+        // 兼容不同 iOS 版本获取 rootViewController
+        UIViewController *rootVC = [UIApplication sharedApplication].keyWindow.rootViewController;
+        if (!rootVC) {
+            rootVC = [UIApplication sharedApplication].connectedScenes
+                .allObjects
+                .firstObject
+                .delegate
+                .window
+                .rootViewController;
+        }
+        if (rootVC) {
+            [rootVC presentViewController:alert animated:YES completion:nil];
+        }
+    });
+    
+    // 原有加载逻辑
     if (NSClassFromString(@"WKMessageDB")) {
         performDynamicAntiRevoke();
     } else {
