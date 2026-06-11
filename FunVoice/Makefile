@@ -8,6 +8,6 @@ TWEAK_NAME = FunVoice
 
 FunVoice_FILES = Tweak.x
 FunVoice_FRAMEWORKS = UIKit Foundation AVFoundation MobileCoreServices
-FunVoice_CFLAGS = -fobjc-arc -Wno-arc-performSelector-leaks -Wno-deprecated-declarations
+FunVoice_CFLAGS = -fobjc-arc -Wno-arc-performSelector-leaks -Wno-deprecated-declarations -Wno-incompatible-pointer-types-discards-qualifiers
 
 include $(THEOS_MAKE_PATH)/tweak.mk

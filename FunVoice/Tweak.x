@@ -28,10 +28,12 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
                 NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
                 [inv setTarget:[voiceContentClass alloc]];
                 [inv setSelector:initSel];
-                [inv setArgument:&amrData atIndex:2];
+                __unsafe_unretained NSData *argData = amrData;
+                [inv setArgument:&argData atIndex:2];
                 NSInteger dur = duration;
                 [inv setArgument:&dur atIndex:3];
-                [inv setArgument:&dummyWaveform atIndex:4];
+                __unsafe_unretained NSMutableData *argWave = dummyWaveform;
+                [inv setArgument:&argWave atIndex:4];
                 [inv invoke];
                 __unsafe_unretained id result = nil;
                 [inv getReturnValue:&result];
@@ -49,8 +51,10 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
                     NSInvocation *sendInv = [NSInvocation invocationWithMethodSignature:sendSig];
                     [sendInv setTarget:chatManager];
                     [sendInv setSelector:sendSel];
-                    [sendInv setArgument:&voiceContent atIndex:2];
-                    [sendInv setArgument:&channel atIndex:3];
+                    __unsafe_unretained id argContent = voiceContent;
+                    [sendInv setArgument:&argContent atIndex:2];
+                    __unsafe_unretained id argChannel = channel;
+                    [sendInv setArgument:&argChannel atIndex:3];
                     [sendInv invoke];
                     NSLog(@"[UUUVoiceFun] 趣味语音发送成功！");
                 }
