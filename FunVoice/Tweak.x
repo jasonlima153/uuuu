@@ -8,19 +8,17 @@
 @end
 
 // ==========================================
-// 原生协议欺骗：精准匹配 IPA 中的真实签名
+// 原生协议声明
 // ==========================================
 @protocol UUUTalkCoreProtocols <NSObject>
-// 报告确认：类方法 (+)
 + (int)EncodeWavToAmr:(NSString *)wavPath amrSavePath:(NSString *)amrPath sampleRateType:(int)type;
-// 报告确认：类方法 (+)
-+ (instancetype)initWithData:(NSData *)data second:(NSInteger)second waveform:(NSData *)waveform;
+- (instancetype)initWithData:(NSData *)data second:(NSInteger)second waveform:(NSData *)waveform;
 + (id)shared;
 - (id)chatManager;
 - (void)sendMessage:(id)msg channel:(id)channel;
 @end
 
-#pragma mark - 1. 核心发送引擎 (Protocol 原生派发，类方法直接调用)
+#pragma mark - 1. 核心发送引擎 (alloc + init 实例方法)
 
 static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
     if (!amrData || !channel) return;
@@ -35,9 +33,8 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
         @try {
             Class voiceContentClass = NSClassFromString(@"WKVoiceContent");
             if (voiceContentClass) {
-                // 类方法直接调用，不需要 alloc
-                id<UUUTalkCoreProtocols> voiceClassProto = (id<UUUTalkCoreProtocols>)voiceContentClass;
-                id voiceContent = [voiceClassProto initWithData:amrData second:duration waveform:dummyWaveform];
+                id<UUUTalkCoreProtocols> allocatedVoice = [voiceContentClass alloc];
+                id voiceContent = [allocatedVoice initWithData:amrData second:duration waveform:dummyWaveform];
 
                 Class sdkClass = NSClassFromString(@"WKSDK");
                 id<UUUTalkCoreProtocols> sharedSDK = [sdkClass shared];
@@ -45,16 +42,16 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
 
                 if (chatManager && voiceContent) {
                     [chatManager sendMessage:voiceContent channel:channel];
-                    NSLog(@"[UUUVoiceFun] 趣味语音发送成功！");
+                    NSLog(@"[UUUVoiceFun] 趣味语音安全组装并发送成功！");
                 }
             }
         } @catch (NSException *e) {
-            NSLog(@"[UUUVoiceFun] 发送异常: %@", e);
+            NSLog(@"[UUUVoiceFun] 发送异常拦截: %@", e);
         }
     });
 }
 
-#pragma mark - 2. 趣味语音主面板 (极简纯净 MP3)
+#pragma mark - 2. 趣味语音主面板
 
 @interface UUUVoiceFunViewController : UIViewController <UITableViewDelegate, UITableViewDataSource, UIDocumentPickerDelegate>
 @property (nonatomic, strong) UITableView *tableView;
@@ -157,7 +154,6 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
     });
 }
 
-// 【极简级转码引擎】：60秒限制，一把过
 - (void)safeConvertAndSendAudio:(NSString *)filePath {
     __block NSData *amrData = nil;
     __block NSInteger duration = 1;
@@ -183,19 +179,21 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
                     [inFile readIntoBuffer:inBuffer frameCount:framesToRead error:nil];
 
                     AVAudioConverter *converter = [[AVAudioConverter alloc] initFromFormat:inBuffer.format toFormat:outFormat];
-                    AVAudioFrameCount outFrames = (AVAudioFrameCount)(framesToRead * (8000.0 / inFile.fileFormat.sampleRate));
-                    AVAudioPCMBuffer *outBuffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:outFormat frameCapacity:MAX(100, outFrames)];
+                    if (converter) {
+                        AVAudioFrameCount outFrames = (AVAudioFrameCount)(framesToRead * (8000.0 / inFile.fileFormat.sampleRate));
+                        AVAudioPCMBuffer *outBuffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:outFormat frameCapacity:MAX(100, outFrames)];
 
-                    __block BOOL inputGiven = NO;
-                    [converter convertToBuffer:outBuffer error:nil withInputFromBlock:^AVAudioBuffer *(AVAudioPacketCount inNumberOfPackets, AVAudioConverterInputStatus *outStatus) {
-                        if (inputGiven) { *outStatus = AVAudioConverterInputStatus_EndOfStream; return nil; }
-                        inputGiven = YES;
-                        *outStatus = AVAudioConverterInputStatus_HaveData;
-                        return inBuffer;
-                    }];
+                        __block BOOL inputGiven = NO;
+                        [converter convertToBuffer:outBuffer error:nil withInputFromBlock:^AVAudioBuffer *(AVAudioPacketCount inNumberOfPackets, AVAudioConverterInputStatus *outStatus) {
+                            if (inputGiven) { *outStatus = AVAudioConverterInputStatus_EndOfStream; return nil; }
+                            inputGiven = YES;
+                            *outStatus = AVAudioConverterInputStatus_HaveData;
+                            return inBuffer;
+                        }];
 
-                    [outFile writeFromBuffer:outBuffer error:nil];
-                    duration = MAX(1, MIN((NSInteger)(framesToRead / inFile.fileFormat.sampleRate), 60));
+                        [outFile writeFromBuffer:outBuffer error:nil];
+                        duration = MAX(1, MIN((NSInteger)(framesToRead / inFile.fileFormat.sampleRate), 60));
+                    }
                 }
 
                 inFile = nil;
@@ -208,7 +206,7 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
                     amrData = [NSData dataWithContentsOfFile:amrPath];
                 }
             }
-        } @catch (NSException *e) { NSLog(@"[UUUVoiceFun] MP3转码异常: %@", e); }
+        } @catch (NSException *e) { NSLog(@"[UUUVoiceFun] MP3转码容错拦截: %@", e); }
     } else {
         amrData = [NSData dataWithContentsOfFile:filePath];
     }
@@ -226,7 +224,7 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
 }
 @end
 
-#pragma mark - 3. Hook: WKConversationVC (报告确认的真实类名)
+#pragma mark - 3. Hook: WKConversationVC
 
 %group UUUVoiceFunHooks
 
