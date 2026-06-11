@@ -3,6 +3,10 @@
 #import <AVFoundation/AVFoundation.h>
 #import <CoreServices/CoreServices.h>
 
+#pragma mark - Forward Declarations
+@interface WKConversationInputPanel : UIView
+@end
+
 #pragma mark - 1. 绝对安全的动态调用引擎 (全类型支持)
 
 static id safeInvoke(id target, SEL selector, NSArray *arguments) {
@@ -335,9 +339,10 @@ static id safeInvoke(id target, SEL selector, NSArray *arguments) {
     %orig;
 
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (self.window) {
+        UIView *selfView = (UIView *)self;
+        if (selfView.window) {
             UIViewController *chatVC = nil;
-            UIResponder *responder = self;
+            UIResponder *responder = selfView;
             while ((responder = [responder nextResponder])) {
                 if ([responder isKindOfClass:[UIViewController class]]) {
                     chatVC = (UIViewController *)responder;
@@ -349,8 +354,8 @@ static id safeInvoke(id target, SEL selector, NSArray *arguments) {
                 UUUFloatingVoiceButton *btn = [UUUFloatingVoiceButton sharedButton];
                 btn.currentChatVC = chatVC;
 
-                [self.window addSubview:btn];
-                [self.window bringSubviewToFront:btn];
+                [selfView.window addSubview:btn];
+                [selfView.window bringSubviewToFront:btn];
                 btn.hidden = NO;
             }
         } else {
