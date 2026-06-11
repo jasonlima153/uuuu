@@ -30,6 +30,11 @@ static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) 
         NSLog(@"[UUUVoiceFun] 拦截：amrData 或 channel 为空");
         return;
     }
+    // 0字节拦截阀门：转码失败生成的空 AMR 绝不交给发送接口
+    if (amrData.length < 50) {
+        NSLog(@"[UUUVoiceFun] 拦截：AMR 数据异常 (%lu 字节)，疑似转码失败产生的空文件", (unsigned long)amrData.length);
+        return;
+    }
     NSLog(@"[UUUVoiceFun] Channel 真实类型: %@", NSStringFromClass([channel class]));
 
     NSMutableData *dummyWaveform = [NSMutableData dataWithCapacity:100];
@@ -386,7 +391,7 @@ static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) 
                 [[NSFileManager defaultManager] removeItemAtPath:wavPath error:nil];
                 [[NSFileManager defaultManager] removeItemAtPath:amrPath error:nil];
 
-                if (amrData && amrData.length > 0) {
+                if (amrData && amrData.length >= 50) {
                     // 打包为 Plist
                     NSString *name = [[fileURL lastPathComponent] stringByDeletingPathExtension];
                     NSDictionary *voiceItem = @{
