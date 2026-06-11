@@ -189,16 +189,28 @@
 
 #pragma mark - 3. 插件初始化
 
+static void initVoiceFunUI_once() {
+    static BOOL hasInjected = NO;
+    if (hasInjected) return;
+
+    if (NSClassFromString(@"WKConversationInputPanel")) {
+        NSLog(@"[UUUVoiceFun] 动态激活趣味语音 UI 注入...");
+        %init(UUUVoiceFunUI);
+        hasInjected = YES;
+    }
+}
+
 %ctor {
     if (NSClassFromString(@"WKConversationInputPanel")) {
-        %init(UUUVoiceFunUI);
+        initVoiceFunUI_once();
     } else {
         [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidFinishLaunchingNotification
                                                          object:nil
                                                           queue:nil
                                                      usingBlock:^(NSNotification *note) {
-            %init(UUUVoiceFunUI);
+            initVoiceFunUI_once();
         }];
     }
+
     %init;
 }
