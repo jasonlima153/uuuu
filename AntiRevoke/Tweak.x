@@ -33,7 +33,7 @@ static void showAntiRevokeToast() {
         toast.font = [UIFont boldSystemFontOfSize:15];
         toast.layer.cornerRadius = 8;
         toast.clipsToBounds = YES;
-        toast.text = @"\uD83D\uDEAB \u6210\u529F\u62E6\u622A\u5BF9\u65B9\u64A4\u56DE\u64CD\u4F5C";
+        toast.text = @"🚫 成功拦截对方撤回操作";
         
         toast.layer.shadowColor = [UIColor blackColor].CGColor;
         toast.layer.shadowOffset = CGSizeMake(0, 2);
@@ -86,9 +86,6 @@ static void showAntiRevokeToast() {
 %hook WKMessageExtra
 - (BOOL)revoke {
     return NO;
-}
-- (int)revoke {
-    return 0;
 }
 %end
 
