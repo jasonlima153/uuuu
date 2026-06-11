@@ -1,8 +1,12 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
-#import <MobileCoreServices/MobileCoreServices.h>
+#import <CoreServices/CoreServices.h>
 #import <objc/message.h>
+
+#pragma mark - Forward Declarations
+@interface WKConversationInputPanel : UIView
+@end
 
 #pragma mark - 1. 核心控制器：处理文件选择与发送逻辑
 
