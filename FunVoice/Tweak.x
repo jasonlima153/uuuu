@@ -4,7 +4,7 @@
 #import <objc/runtime.h>
 
 #pragma mark - Forward Declarations
-@interface WKConversationInputPanel : UIView
+@interface WKConversationVC : UIViewController
 @end
 
 // ==========================================
@@ -13,14 +13,19 @@
 @protocol UUUTalkCoreProtocols <NSObject>
 // VoiceConverter
 + (int)EncodeWavToAmr:(NSString *)wavPath amrSavePath:(NSString *)amrPath sampleRateType:(int)type;
-// WKVoiceContent
-- (instancetype)initWithData:(NSData *)data second:(NSInteger)second waveform:(NSData *)waveform;
+// WKVoiceContent（类方法！）
++ (instancetype)initWithData:(NSData *)data second:(NSInteger)second waveform:(NSData *)waveform;
 // WKSDK
 + (id)shared;
 - (id)chatManager;
 // WKChatManager
 - (void)sendMessage:(id)msg channel:(id)channel;
 @end
+
+#pragma mark - Associated Object Keys
+
+static char kUUUVoiceBtnKey;
+static char kUUUVoiceActionKey;
 
 #pragma mark - 1. 核心发送引擎 (Protocol 原生派发)
 
@@ -36,8 +41,9 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
     dispatch_async(dispatch_get_main_queue(), ^{
         @try {
             Class voiceContentClass = NSClassFromString(@"WKVoiceContent");
-            if (voiceContentClass && [voiceContentClass instancesRespondToSelector:@selector(initWithData:second:waveform:)]) {
-                id<UUUTalkCoreProtocols> voiceContent = [[voiceContentClass alloc] initWithData:amrData second:duration waveform:dummyWaveform];
+            if (voiceContentClass && [voiceContentClass respondsToSelector:@selector(initWithData:second:waveform:)]) {
+                // 类方法调用，不需要 alloc
+                id<UUUTalkCoreProtocols> voiceContent = [voiceContentClass initWithData:amrData second:duration waveform:dummyWaveform];
 
                 Class sdkClass = NSClassFromString(@"WKSDK");
                 id<UUUTalkCoreProtocols> sharedSDK = [sdkClass shared];
@@ -157,7 +163,7 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
     });
 }
 
-// 【极简级转码引擎】：60秒限制，一把过，不搞循环
+// 【极简级转码引擎】：60秒限制，一把过
 - (void)safeConvertAndSendAudio:(NSString *)filePath {
     __block NSData *amrData = nil;
     __block NSInteger duration = 1;
@@ -225,68 +231,63 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
 }
 @end
 
-#pragma mark - 3. UI 绑定：独立 Action 对象 + UIApplication 顶层路由
+#pragma mark - 3. UI 绑定：独立 Action 对象 + UIApplication 顶层路由 (iOS 13+ 兼容)
 
 @interface UUUVoiceFunAction : NSObject
+@property (nonatomic, weak) WKConversationVC *chatVC;
 @end
 
 @implementation UUUVoiceFunAction
 - (void)openVoicePanel {
-    // 通过 UIApplication 遍历拿到屏幕最顶层的控制器，无视输入面板断裂的响应链
-    UIViewController *topVC = [UIApplication sharedApplication].keyWindow.rootViewController;
-    while (topVC.presentedViewController) {
-        topVC = topVC.presentedViewController;
-    }
-    if ([topVC isKindOfClass:[UINavigationController class]]) {
-        topVC = [(UINavigationController *)topVC visibleViewController];
-    }
-
-    // 直接尝试获取 channel，不依赖类名匹配（WKConversationViewController 可能不存在）
-    id channel = [topVC valueForKey:@"channel"];
+    if (!self.chatVC) return;
+    id channel = [self.chatVC valueForKey:@"channel"];
     if (channel) {
         UUUVoiceFunViewController *vc = [[UUUVoiceFunViewController alloc] init];
         vc.currentChannel = channel;
         UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
         nav.modalPresentationStyle = UIModalPresentationFormSheet;
-        [topVC presentViewController:nav animated:YES completion:nil];
+        [self.chatVC presentViewController:nav animated:YES completion:nil];
     } else {
-        NSLog(@"[UUUVoiceFun] 错误：无法定位到聊天控制器！");
+        NSLog(@"[UUUVoiceFun] 错误：无法获取 channel！");
     }
 }
 @end
 
-#pragma mark - 4. Hook: 绑定 WKConversationInputPanel
+#pragma mark - 4. Hook: 绑定 WKConversationVC (正确的类名！)
 
 %group UUUVoiceFunHooks
 
-%hook WKConversationInputPanel
+%hook WKConversationVC
 
-- (void)didMoveToWindow {
+- (void)viewDidLoad {
     %orig;
 
-    dispatch_async(dispatch_get_main_queue(), ^{
-        if (self.window) {
-            UIButton *btn = objc_getAssociatedObject(self, "uuu_voice_btn");
-            if (!btn) {
-                btn = [UIButton buttonWithType:UIButtonTypeCustom];
-                btn.frame = CGRectMake([UIScreen mainScreen].bounds.size.width - 60, -55, 46, 46);
-                btn.backgroundColor = [UIColor colorWithRed:0.24 green:0.52 blue:0.98 alpha:0.9];
-                btn.layer.cornerRadius = 23;
-                btn.layer.shadowColor = [UIColor blackColor].CGColor;
-                btn.layer.shadowOpacity = 0.3;
-                btn.layer.shadowOffset = CGSizeMake(0, 2);
-                [btn setTitle:@"\U0001F3B5" forState:UIControlStateNormal];
-                btn.titleLabel.font = [UIFont systemFontOfSize:20];
+    // 延迟创建悬浮按钮，确保视图层级已建立
+    [self performSelector:@selector(uuu_setupFloatBtn) withObject:nil afterDelay:0.5];
+}
 
-                UUUVoiceFunAction *action = [[UUUVoiceFunAction alloc] init];
-                [btn addTarget:action action:@selector(openVoicePanel) forControlEvents:UIControlEventTouchUpInside];
+%new
+- (void)uuu_setupFloatBtn {
+    if ([self.view viewWithTag:888999]) return;
 
-                [self addSubview:btn];
-                objc_setAssociatedObject(self, "uuu_voice_btn", btn, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                objc_setAssociatedObject(self, "uuu_voice_action", action, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            }
-        }
-    });
+    UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
+    btn.tag = 888999;
+    btn.frame = CGRectMake(self.view.bounds.size.width - 65, 100, 48, 48);
+    btn.backgroundColor = [UIColor colorWithRed:0.24 green:0.52 blue:0.98 alpha:0.9];
+    btn.layer.cornerRadius = 24;
+    btn.layer.shadowColor = [UIColor blackColor].CGColor;
+    btn.layer.shadowOpacity = 0.3;
+    btn.layer.shadowOffset = CGSizeMake(0, 2);
+    [btn setTitle:@"\U0001F3B5" forState:UIControlStateNormal];
+    btn.titleLabel.font = [UIFont systemFontOfSize:22];
+
+    UUUVoiceFunAction *action = [[UUUVoiceFunAction alloc] init];
+    action.chatVC = self;
+    [btn addTarget:action action:@selector(openVoicePanel) forControlEvents:UIControlEventTouchUpInside];
+
+    [self.view addSubview:btn];
+    objc_setAssociatedObject(self, &kUUUVoiceBtnKey, btn, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kUUUVoiceActionKey, action, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
 %end
@@ -298,14 +299,14 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
 static void initVoiceFunModule_once() {
     static BOOL initialized = NO;
     if (initialized) return;
-    if (NSClassFromString(@"WKConversationInputPanel")) {
+    if (NSClassFromString(@"WKConversationVC")) {
         %init(UUUVoiceFunHooks);
         initialized = YES;
     }
 }
 
 %ctor {
-    if (NSClassFromString(@"WKConversationInputPanel")) {
+    if (NSClassFromString(@"WKConversationVC")) {
         initVoiceFunModule_once();
     } else {
         [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidFinishLaunchingNotification
