@@ -1,14 +1,13 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
-#import <MobileCoreServices/MobileCoreServices.h>
 #import <objc/runtime.h>
 
 #pragma mark - Forward Declarations
 @interface WKConversationInputPanel : UIView
 @end
 
-#pragma mark - 1. 核心发送引擎 (NSInvocation + C函数指针双保险)
+#pragma mark - 1. 核心发送引擎 (NSInvocation 双模式 + C函数指针)
 
 static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
     if (!amrData || !channel) return;
@@ -141,7 +140,7 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
         const char *bytes = audioData.bytes;
         if (bytes[0] == 0x02 && bytes[1] == '#' && bytes[2] == '!') {
             UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"格式不支持"
-                                                                           message:@"该 plist 包含微信 SILK 格式，UUUTalk 不支持发送！\n\n请直接下载并导入普通的 .mp3 语音文件，插件会自动无损转码发送。"
+                                                                           message:@"该 plist 包含微信 SILK 格式，UUUTalk 不支持发送！\n\n请导入普通的 .mp3 语音文件，插件会自动将其转码发送。"
                                                                     preferredStyle:UIAlertControllerStyleAlert];
             [alert addAction:[UIAlertAction actionWithTitle:@"知道了" style:UIAlertActionStyleCancel handler:nil]];
             [self presentViewController:alert animated:YES completion:nil];
@@ -218,24 +217,57 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { return self.dataSource.count; }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-    UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:@"MainCell"];
+    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"MainCell"];
+    if (!cell) {
+        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:@"MainCell"];
+    }
+
     NSString *fileName = self.dataSource[indexPath.row];
     cell.textLabel.text = fileName;
+
     if ([fileName hasSuffix:@".plist"]) {
         cell.imageView.image = [UIImage systemImageNamed:@"folder.fill"];
+        cell.accessoryView = nil;
         cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
     } else {
+        // 【核心修复1】：给主页的 MP3 和 AMR 文件加上右侧发送按钮
         cell.imageView.image = [UIImage systemImageNamed:@"music.note"];
+        cell.accessoryType = UITableViewCellAccessoryNone;
+
+        UIButton *sendBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+        [sendBtn setTitle:@"发送" forState:UIControlStateNormal];
+        sendBtn.backgroundColor = [UIColor colorWithRed:0.24 green:0.52 blue:0.98 alpha:1.0];
+        [sendBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+        sendBtn.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
+        sendBtn.layer.cornerRadius = 14;
+        sendBtn.frame = CGRectMake(0, 0, 56, 28);
+        sendBtn.tag = indexPath.row;
+        [sendBtn addTarget:self action:@selector(mainSendButtonClicked:) forControlEvents:UIControlEventTouchUpInside];
+        cell.accessoryView = sendBtn;
     }
     return cell;
 }
 
+// 主页 MP3/AMR 发送按钮的专属点击事件
+- (void)mainSendButtonClicked:(UIButton *)sender {
+    NSInteger row = sender.tag;
+    if (row >= self.dataSource.count) return;
+
+    NSString *fileName = self.dataSource[row];
+    NSString *fullPath = [self.basePath stringByAppendingPathComponent:fileName];
+
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        [self processSingleAudio:fullPath];
+    });
+}
+
+// 只有 .plist 文件夹才允许点击整行进入二级页面，MP3/AMR 只能通过发送按钮触发
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
     NSString *fileName = self.dataSource[indexPath.row];
-    NSString *fullPath = [self.basePath stringByAppendingPathComponent:fileName];
 
     if ([fileName hasSuffix:@".plist"]) {
+        NSString *fullPath = [self.basePath stringByAppendingPathComponent:fileName];
         @try {
             id plistObj = [NSDictionary dictionaryWithContentsOfFile:fullPath] ?: [NSArray arrayWithContentsOfFile:fullPath];
             NSMutableArray *normalizedList = [NSMutableArray array];
@@ -277,17 +309,14 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
                 [self.navigationController pushViewController:detailVC animated:YES];
             }
         } @catch (NSException *e) { NSLog(@"[UUUVoiceFun] Plist解析失败: %@", e); }
-    } else if ([fileName hasSuffix:@".mp3"] || [fileName hasSuffix:@".amr"]) {
-        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-            [self processSingleAudio:fullPath];
-        });
     }
 }
 
-// 【核心修复】：彻底解决 MP3 转码卡死（死循环）问题
+// 【核心修复2】：彻底解决 MP3 转码闪退（内存限制引擎 + 容错验证 + 失败弹窗）
 - (void)processSingleAudio:(NSString *)filePath {
     __block NSData *amrData = nil;
     __block NSInteger duration = 1;
+    __block BOOL processSuccess = YES;
 
     if ([filePath hasSuffix:@".mp3"]) {
         NSString *wavPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"tmp_fun.wav"];
@@ -296,60 +325,77 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
         [[NSFileManager defaultManager] removeItemAtPath:amrPath error:nil];
 
         @try {
-            NSError *error = nil;
-            AVAudioFile *inputFile = [[AVAudioFile alloc] initForReading:[NSURL fileURLWithPath:filePath] error:&error];
-            if (inputFile) {
-                AVAudioFormat *outputFormat = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatInt16 sampleRate:8000 channels:1 interleaved:YES];
-                AVAudioFile *outputFile = [[AVAudioFile alloc] initForWriting:[NSURL fileURLWithPath:wavPath] settings:outputFormat.settings error:&error];
-                AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:inputFile.processingFormat frameCapacity:(AVAudioFrameCount)inputFile.length];
-                [inputFile readIntoBuffer:buffer error:nil];
+            NSURL *inURL = [NSURL fileURLWithPath:filePath];
+            AVAudioFile *inFile = [[AVAudioFile alloc] initForReading:inURL error:nil];
 
-                AVAudioConverter *converter = [[AVAudioConverter alloc] initFromFormat:inputFile.processingFormat toFormat:outputFormat];
-                AVAudioPCMBuffer *outBuffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:outputFormat frameCapacity:(AVAudioFrameCount)(buffer.frameCapacity * (8000.0 / inputFile.fileFormat.sampleRate))];
+            // 极严格的容错验证：文件要存在且采样率不能为 0（防损坏假 MP3 引起闪退）
+            if (inFile && inFile.fileFormat.sampleRate > 0) {
+                AVAudioFormat *outFormat = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatInt16 sampleRate:8000 channels:1 interleaved:YES];
+                AVAudioFile *outFile = [[AVAudioFile alloc] initForWriting:[NSURL fileURLWithPath:wavPath] settings:outFormat.settings error:nil];
 
-                __block BOOL hasSuppliedData = NO;
-                [converter convertToBuffer:outBuffer error:nil withInputFromBlock:^AVAudioBuffer *(AVAudioPacketCount inNumberOfPackets, AVAudioConverterInputStatus *outStatus) {
-                    if (hasSuppliedData) {
-                        *outStatus = AVAudioConverterInputStatus_EndOfStream; // 终结死循环
-                        return nil;
-                    }
-                    hasSuppliedData = YES;
-                    *outStatus = AVAudioConverterInputStatus_HaveData;
-                    return buffer;
-                }];
-                [outputFile writeFromBuffer:outBuffer error:nil];
+                // 内存截断引擎：严格限制最大只分配 60 秒音频内存，拒绝超大文件炸毁系统
+                AVAudioFrameCount framesToRead = (AVAudioFrameCount)MIN(inFile.length, inFile.fileFormat.sampleRate * 60.0);
 
-                duration = MAX(1, MIN((NSInteger)(inputFile.length / inputFile.fileFormat.sampleRate), 60));
+                if (framesToRead > 0) {
+                    AVAudioPCMBuffer *inBuffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:inFile.processingFormat frameCapacity:framesToRead];
+                    [inFile readIntoBuffer:inBuffer frameCount:framesToRead error:nil];
 
-                // 文件关闭后再传给底层C++库
-                outputFile = nil;
+                    AVAudioConverter *converter = [[AVAudioConverter alloc] initFromFormat:inBuffer.format toFormat:outFormat];
+                    AVAudioFrameCount outCapacity = (AVAudioFrameCount)(framesToRead * (8000.0 / inFile.fileFormat.sampleRate));
+                    AVAudioPCMBuffer *outBuffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:outFormat frameCapacity:MAX(100, outCapacity)];
 
+                    __block BOOL inputGiven = NO;
+                    [converter convertToBuffer:outBuffer error:nil withInputFromBlock:^AVAudioBuffer *(AVAudioPacketCount inNumberOfPackets, AVAudioConverterInputStatus *outStatus) {
+                        if (inputGiven) {
+                            *outStatus = AVAudioConverterInputStatus_EndOfStream; // 终结转码死循环
+                            return nil;
+                        }
+                        inputGiven = YES;
+                        *outStatus = AVAudioConverterInputStatus_HaveData;
+                        return inBuffer;
+                    }];
+
+                    [outFile writeFromBuffer:outBuffer error:nil];
+                    duration = MAX(1, MIN((NSInteger)(framesToRead / inFile.fileFormat.sampleRate), 60));
+                }
+
+                inFile = nil;
+                outFile = nil;
+
+                // 使用 C 函数指针调用 VoiceConverter（比 NSInvocation 更安全）
                 Class converterCls = NSClassFromString(@"VoiceConverter");
                 SEL encSel = NSSelectorFromString(@"EncodeWavToAmr:amrSavePath:sampleRateType:");
                 if (converterCls && [converterCls respondsToSelector:encSel]) {
-                    NSMethodSignature *sig = [converterCls methodSignatureForSelector:encSel];
-                    NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
-                    [inv setTarget:converterCls];
-                    [inv setSelector:encSel];
-                    [inv setArgument:&wavPath atIndex:2];
-                    [inv setArgument:&amrPath atIndex:3];
-                    int type = 0;
-                    [inv setArgument:&type atIndex:4];
-                    [inv invoke];
+                    typedef int (*EncodeFunc)(id, SEL, NSString*, NSString*, int);
+                    EncodeFunc func = (EncodeFunc)[converterCls methodForSelector:encSel];
+                    func(converterCls, encSel, wavPath, amrPath, 0);
                     amrData = [NSData dataWithContentsOfFile:amrPath];
                 }
+            } else {
+                processSuccess = NO;
             }
-        } @catch (NSException *e) { NSLog(@"[UUUVoiceFun] MP3底层转码异常: %@", e); }
+        } @catch (NSException *e) {
+            NSLog(@"[UUUVoiceFun] MP3底层转码异常拦截: %@", e);
+            processSuccess = NO;
+        }
     } else {
         amrData = [NSData dataWithContentsOfFile:filePath];
     }
 
-    if (amrData) {
-        sendAMRVoiceData(amrData, duration, self.currentChannel);
-        dispatch_async(dispatch_get_main_queue(), ^{
+    // 主线程 UI 更新与投递
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (amrData && processSuccess) {
+            sendAMRVoiceData(amrData, duration, self.currentChannel);
             [self close];
-        });
-    }
+        } else {
+            // 解析失败安全弹窗，不闪退
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"解析失败"
+                                                                           message:@"该音频文件已损坏或格式不标准，无法转码发送。"
+                                                                    preferredStyle:UIAlertControllerStyleAlert];
+            [alert addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleCancel handler:nil]];
+            [self presentViewController:alert animated:YES completion:nil];
+        }
+    });
 }
 @end
 
