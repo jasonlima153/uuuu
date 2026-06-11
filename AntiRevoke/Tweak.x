@@ -2,195 +2,113 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
-// 设置开关持久化 Key
-static NSString *const kAntiRevokeEnabledKey = @"AntiRevoke_Enabled";
-
-// 全局通知生命周期监听销毁者
-// 开关状态变更回调 helper 类
-@interface AntiRevokeToggleHelper : NSObject
-@property (nonatomic, weak) UISwitch *toggleSwitch;
-@end
-@implementation AntiRevokeToggleHelper
-- (void)switchToggled:(UISwitch *)sender {
-    BOOL isOn = sender.on;
-    NSUserDefaults *d = [[NSUserDefaults alloc] initWithSuiteName:@"AntiRevokeSuite"];
-    [d setBool:isOn forKey:kAntiRevokeEnabledKey];
-    [d synchronize];
-    NSLog(@"[AntiRevoke] 开关状态已更新: %@", isOn ? @"开启" : @"关闭");
-}
-@end
-
 static id launchObserver = nil;
 
-#pragma mark - 0. 设置页面开关 UI
+#pragma mark - 1. 占位与缓存指针
 
-static void injectSettingsToggle() {
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        Class settingsVCClass = NSClassFromString(@"WKMeVC");
-        if (!settingsVCClass) {
-            // 备用：尝试其他设置页类名
-            settingsVCClass = NSClassFromString(@"WKSettingsVC");
-        }
-        if (!settingsVCClass) {
-            NSLog(@"[AntiRevoke] 未找到设置页类，跳过开关注入");
-            return;
-        }
-        
-        // 在 WKMeVC 的 viewDidLoad 中注入开关
-        SEL viewDidLoadSel = @selector(viewDidLoad);
-        Method origMethod = class_getInstanceMethod(settingsVCClass, viewDidLoadSel);
-        if (!origMethod) return;
-        
-        IMP origImp = method_getImplementation(origMethod);
-        
-        IMP newImp = imp_implementationWithBlock(^(id self) {
-            // 先执行原 viewDidLoad
-            ((void(*)(id, SEL))origImp)(self, viewDidLoadSel);
-            
-            // 延迟注入开关（等 tableView 加载完毕）
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                @try {
-                    UITableView *tableView = nil;
-                    if ([self isKindOfClass:[UIViewController class]]) {
-                        for (UIView *subview in [(UIViewController *)self view].subviews) {
-                            if ([subview isKindOfClass:[UIScrollView class]]) {
-                                for (UIView *child in subview.subviews) {
-                                    if ([child isKindOfClass:[UITableView class]]) {
-                                        tableView = (UITableView *)child;
-                                        break;
-                                    }
-                                }
-                            }
-                            if (tableView) break;
-                        }
-                    }
-                    
-                    if (!tableView) {
-                        // 尝试通过 KVC 获取
-                        tableView = [self valueForKeyPath:@"tableView"];
-                    }
-                    
-                    if (!tableView) {
-                        NSLog(@"[AntiRevoke] 未找到设置页 tableView");
-                        return;
-                    }
-                    
-                    // 读取当前开关状态
-                    NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:@"AntiRevokeSuite"];
-                    BOOL enabled = [defaults boolForKey:kAntiRevokeEnabledKey];
-                    
-                    // 创建开关 Cell
-                    UITableViewCell *toggleCell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:@"AntiRevokeToggle"];
-                    toggleCell.selectionStyle = UITableViewCellSelectionStyleNone;
-                    toggleCell.textLabel.text = @"消息防撤回";
-                    toggleCell.textLabel.font = [UIFont systemFontOfSize:17];
-                    toggleCell.accessoryView = [[UISwitch alloc] init];
-                    toggleCell.separatorInset = UIEdgeInsetsZero;
-                    
-                    UISwitch *toggleSwitch = (UISwitch *)toggleCell.accessoryView;
-                    toggleSwitch.on = enabled;
-                    toggleSwitch.onTintColor = [UIColor colorWithRed:0.2 green:0.6 blue:1.0 alpha:1.0];
-                    
-                    // 使用 helper 对象接收开关事件
-                    AntiRevokeToggleHelper *toggleHelper = [[AntiRevokeToggleHelper alloc] init];
-                    toggleHelper.toggleSwitch = toggleSwitch;
-                    [toggleSwitch addTarget:toggleHelper action:@selector(switchToggled:) forControlEvents:UIControlEventValueChanged];
-                    
-                    // 插入到 tableView 第一组末尾
-                    @try {
-                        NSInteger lastSection = 0;
-                        if ([tableView numberOfSections] > 0) {
-                            lastSection = 0;
-                        }
-                        NSInteger rowCount = [tableView numberOfRowsInSection:lastSection];
-                        [tableView insertRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:rowCount inSection:lastSection]]
-                                          withRowAnimation:UITableViewRowAnimationAutomatic];
-                        
-                        // 用关联对象持有 cell 和 helper 防止被释放
-                        objc_setAssociatedObject(self, "AntiRevokeToggleCell", toggleCell, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                        objc_setAssociatedObject(self, "AntiRevokeToggleHelper", toggleHelper, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                    } @catch (NSException *e) {
-                        NSLog(@"[AntiRevoke] 插入开关行失败: %@", e.reason);
-                    }
-                } @catch (NSException *exception) {
-                    NSLog(@"[AntiRevoke] 设置页注入安全防御触发: %@", exception.reason);
-                }
-            });
-        });
-        
-        class_replaceMethod(settingsVCClass, viewDidLoadSel, newImp, method_getTypeEncoding(origMethod));
-        NSLog(@"[AntiRevoke] 设置页开关注入成功");
-    });
-}
-
-#pragma mark - 1. 动态拦截占位函数
-
-// 阻断消息扩展表批量同步的空实现
+// 阻断消息扩展表离线同步的空实现
 static void dummy_extra_imp(id self, SEL _cmd, id extras) {
-    NSLog(@"[AntiRevoke] 成功拦截并阻断 message_extra 扩展表的状态覆盖");
+    NSLog(@"[AntiRevoke] 已阻断 message_extra 离线同步覆盖");
 }
 
-#pragma mark - 2. 核心拦截与痕迹注入
+// 缓存原函数指针
+static void (*orig_updateMessageRevoke)(id, SEL, id, id) = NULL;
+static id (*orig_WKMessage_content)(id, SEL) = NULL;
 
-// 原始数据库更新方法指针缓存
-static void (*orig_updateMessageRevoke_clientMsgNo)(id, SEL, id, id) = NULL;
+#pragma mark - 2. 核心拦截：捕获指令并记入黑名单（不调原函数）
 
-// 核心劫持函数：放行标志位写入，但强行恢复文本并拼接已撤回痕迹
-static void hook_updateMessageRevoke_clientMsgNo(id self, SEL _cmd, id revokeStatus, id msgNo) {
-    NSLog(@"[AntiRevoke] 捕获到底层数据库撤回修改行为: msgNo = %@", msgNo);
+static void hook_updateMessageRevoke(id self, SEL _cmd, id revokeStatus, id msgNo) {
+    NSLog(@"[AntiRevoke] 捕获到底层撤回修改: msgNo = %@", msgNo);
     
-    // 先调用原有的数据库更新逻辑，让系统标志位和会话列表正常走完流程，防止状态死锁
-    if (orig_updateMessageRevoke_clientMsgNo) {
-        orig_updateMessageRevoke_clientMsgNo(self, _cmd, revokeStatus, msgNo);
-    }
-    
-    // 动态获取消息管理器实例以查询内存中的消息模型
-    Class managerClass = NSClassFromString(@"WKMessageManager");
-    if (!managerClass) return;
-    
-    id manager = nil;
-    if ([managerClass respondsToSelector:NSSelectorFromString(@"sharedInstance")]) {
-        manager = [managerClass performSelector:NSSelectorFromString(@"sharedInstance")];
-    } else if ([managerClass respondsToSelector:NSSelectorFromString(@"sharedManager")]) {
-        manager = [managerClass performSelector:NSSelectorFromString(@"sharedManager")];
-    }
-    
-    SEL getMsgSel = NSSelectorFromString(@"getMessageWithClientMsgNo:");
-    if (manager && [manager respondsToSelector:getMsgSel]) {
-        #pragma clang diagnostic push
-        #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-        id messageObj = [manager performSelector:getMsgSel withObject:msgNo];
-        #pragma clang diagnostic pop
+    if (msgNo) {
+        // 1. 记录到本地持久化黑名单
+        NSUserDefaults *def = [NSUserDefaults standardUserDefaults];
+        NSMutableDictionary *dict = [[def objectForKey:@"UUU_AntiRevoke_List"] mutableCopy] ?: [NSMutableDictionary dictionary];
+        dict[[msgNo description]] = @(YES);
+        [def setObject:dict forKey:@"UUU_AntiRevoke_List"];
+        [def synchronize];
         
-        if (messageObj) {
-            @try {
-                // 使用安全的 KVC 路径检测和类型断言获取原始文本
-                NSString *originalText = [messageObj valueForKeyPath:@"content.text"];
+        // 2. 动态热修补当前内存中的消息
+        Class managerClass = NSClassFromString(@"WKMessageManager");
+        if (managerClass) {
+            id manager = nil;
+            if ([managerClass respondsToSelector:NSSelectorFromString(@"sharedInstance")]) {
+                manager = [managerClass performSelector:NSSelectorFromString(@"sharedInstance")];
+            } else if ([managerClass respondsToSelector:NSSelectorFromString(@"sharedManager")]) {
+                manager = [managerClass performSelector:NSSelectorFromString(@"sharedManager")];
+            }
+            
+            SEL getMsgSel = NSSelectorFromString(@"getMessageWithClientMsgNo:");
+            if (manager && [manager respondsToSelector:getMsgSel]) {
+                #pragma clang diagnostic push
+                #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+                id messageObj = [manager performSelector:getMsgSel withObject:msgNo];
+                #pragma clang diagnostic pop
                 
-                if (originalText && [originalText isKindOfClass:[NSString class]]) {
-                    // 检查是否已经加过痕迹，防止重复拼接
-                    if (![originalText containsString:@"(对方尝试撤回)"]) {
-                        NSString *newText = [originalText stringByAppendingString:@" \n\u26A0\uFE0F (对方尝试撤回)"];
-                        
-                        // 使用安全键值路径写回，让 UI 下次重绘时自动刷新
-                        [messageObj setValue:newText forKeyPath:@"content.text"];
-                        
-                        // 强制将消息的 revoke 状态在内存中逆转回 0（未撤回状态），欺骗 UI 渲染引擎
-                        if (class_getProperty([messageObj class], "revoke") || class_getInstanceVariable([messageObj class], "_revoke")) {
-                            [messageObj setValue:@(0) forKey:@"revoke"];
+                if (messageObj) {
+                    @try {
+                        id contentObj = [messageObj valueForKey:@"content"];
+                        NSString *textVal = nil;
+                        NSString *keyToUpdate = nil;
+                        if ([contentObj respondsToSelector:NSSelectorFromString(@"text")]) {
+                            textVal = [contentObj valueForKey:@"text"];
+                            keyToUpdate = @"text";
+                        } else if ([contentObj respondsToSelector:NSSelectorFromString(@"content")]) {
+                            textVal = [contentObj valueForKey:@"content"];
+                            keyToUpdate = @"content";
                         }
                         
-                        NSLog(@"[AntiRevoke] 痕迹注入成功！已将撤回气泡还原为原始文本内容");
-                    }
+                        if (textVal && [textVal isKindOfClass:[NSString class]] && ![textVal containsString:@"\u26A0\uFE0F (\u5BF9\u65B9\u5C1D\u8BD5\u64A4\u56DE)"]) {
+                            NSString *newText = [textVal stringByAppendingString:@" \n\u26A0\uFE0F (\u5BF9\u65B9\u5C1D\u8BD5\u64A4\u56DE)"];
+                            [contentObj setValue:newText forKey:keyToUpdate];
+                            
+                            if (class_getProperty([messageObj class], "revoke") || class_getInstanceVariable([messageObj class], "_revoke")) {
+                                [messageObj setValue:@(0) forKey:@"revoke"];
+                            }
+                        }
+                    } @catch (NSException *e) {}
                 }
-            } @catch (NSException *exception) {
-                NSLog(@"[AntiRevoke] KVC 安全防御触发，跳过痕迹拼接: %@", exception.reason);
             }
         }
     }
+    
+    // 绝对不调用原函数！数据库 revoke 永远为 0
 }
 
-#pragma mark - 3. 生产级安全 Swizzle 引擎
+#pragma mark - 3. 核心拦截：冷启动/重进页面的动态加料
+
+static id hook_WKMessage_content(id self, SEL _cmd) {
+    id contentObj = orig_WKMessage_content(self, _cmd);
+    
+    if (contentObj) {
+        @try {
+            NSString *msgNo = [self valueForKey:@"clientMsgNo"];
+            if (msgNo) {
+                NSDictionary *dict = [[NSUserDefaults standardUserDefaults] objectForKey:@"UUU_AntiRevoke_List"];
+                if (dict && [dict objectForKey:[msgNo description]]) {
+                    NSString *textVal = nil;
+                    NSString *keyToUpdate = nil;
+                    if ([contentObj respondsToSelector:NSSelectorFromString(@"text")]) {
+                        textVal = [contentObj valueForKey:@"text"];
+                        keyToUpdate = @"text";
+                    } else if ([contentObj respondsToSelector:NSSelectorFromString(@"content")]) {
+                        textVal = [contentObj valueForKey:@"content"];
+                        keyToUpdate = @"content";
+                    }
+                    
+                    if (textVal && [textVal isKindOfClass:[NSString class]] && ![textVal containsString:@"\u26A0\uFE0F (\u5BF9\u65B9\u5C1D\u8BD5\u64A4\u56DE)"]) {
+                        NSString *newText = [textVal stringByAppendingString:@" \n\u26A0\uFE0F (\u5BF9\u65B9\u5C1D\u8BD5\u64A4\u56DE)"];
+                        [contentObj setValue:newText forKey:keyToUpdate];
+                    }
+                }
+            }
+        } @catch (NSException *e) {}
+    }
+    
+    return contentObj;
+}
+
+#pragma mark - 4. 安全 Swizzle 引擎
 
 static void safeSwizzleAndSave(NSString *className, NSString *selectorName, IMP newImp, IMP *origImpCache, const char *types) {
     Class targetClass = NSClassFromString(className);
@@ -206,11 +124,11 @@ static void safeSwizzleAndSave(NSString *className, NSString *selectorName, IMP 
         return;
     }
     
-    // 动态提取并严格校验原方法返回值类型，防止寄存器栈错位
+    // 动态校验返回值类型首字符
     char *returnType = method_copyReturnType(originalMethod);
     if (returnType != NULL) {
-        if (strcmp(returnType, @encode(void)) != 0) {
-            NSLog(@"[AntiRevoke] 拒绝劫持: %@.%@ 的返回值非 Void！", className, selectorName);
+        if (returnType[0] != types[0]) {
+            NSLog(@"[AntiRevoke] 拒绝劫持: %@.%@ 返回值类型不匹配！", className, selectorName);
             free(returnType);
             return;
         }
@@ -222,22 +140,145 @@ static void safeSwizzleAndSave(NSString *className, NSString *selectorName, IMP 
     }
     
     class_replaceMethod(targetClass, targetSelector, newImp, types);
-    NSLog(@"[AntiRevoke] 动态方法绑定成功: [%@ %@]", className, selectorName);
+    NSLog(@"[AntiRevoke] 核心防御注入成功: [%@ %@]", className, selectorName);
 }
 
-#pragma mark - 4. 运行时加载与生命周期绑定
+#pragma mark - 5. 设置页开关 UI
+
+@interface AntiRevokeToggleHelper : NSObject
+@property (nonatomic, weak) UISwitch *toggleSwitch;
+@end
+@implementation AntiRevokeToggleHelper
+- (void)switchToggled:(UISwitch *)sender {
+    BOOL isOn = sender.on;
+    NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+    [d setBool:isOn forKey:@"AntiRevoke_Enabled"];
+    [d synchronize];
+    NSLog(@"[AntiRevoke] 开关状态: %@", isOn ? @"开启" : @"关闭");
+}
+@end
+
+static void injectSettingsToggle() {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        Class settingsVCClass = NSClassFromString(@"WKMeVC");
+        if (!settingsVCClass) {
+            settingsVCClass = NSClassFromString(@"WKSettingsVC");
+        }
+        if (!settingsVCClass) {
+            NSLog(@"[AntiRevoke] 未找到设置页类");
+            return;
+        }
+        
+        SEL viewDidLoadSel = @selector(viewDidLoad);
+        Method origMethod = class_getInstanceMethod(settingsVCClass, viewDidLoadSel);
+        if (!origMethod) return;
+        
+        IMP origImp = method_getImplementation(origMethod);
+        
+        IMP newImp = imp_implementationWithBlock(^(id self) {
+            ((void(*)(id, SEL))origImp)(self, viewDidLoadSel);
+            
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                @try {
+                    UITableView *tableView = nil;
+                    
+                    // 方式1: KVC 尝试常见属性名
+                    NSArray *kvcKeys = @[@"tableView", @"_tableView", @"table"];
+                    for (NSString *key in kvcKeys) {
+                        @try {
+                            id val = [self valueForKey:key];
+                            if ([val isKindOfClass:[UITableView class]]) {
+                                tableView = val;
+                                break;
+                            }
+                        } @catch (NSException *e) {}
+                    }
+                    
+                    // 方式2: 视图层级遍历
+                    if (!tableView && [self isKindOfClass:[UIViewController class]]) {
+                        UIViewController *vc = (UIViewController *)self;
+                        NSArray *subviews = vc.view.subviews;
+                        for (UIView *subview in subviews) {
+                            if ([subview isKindOfClass:[UITableView class]]) {
+                                tableView = (UITableView *)subview;
+                                break;
+                            }
+                            // UIScrollView 子视图
+                            if ([subview isKindOfClass:[UIScrollView class]]) {
+                                for (UIView *child in subview.subviews) {
+                                    if ([child isKindOfClass:[UITableView class]]) {
+                                        tableView = (UITableView *)child;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (tableView) break;
+                        }
+                    }
+                    
+                    if (!tableView) {
+                        NSLog(@"[AntiRevoke] 未找到设置页 tableView");
+                        return;
+                    }
+                    
+                    // 读取开关状态
+                    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+                    BOOL enabled = [defaults boolForKey:@"AntiRevoke_Enabled"];
+                    
+                    // 创建开关 Cell
+                    UITableViewCell *toggleCell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:@"AntiRevokeToggle"];
+                    toggleCell.selectionStyle = UITableViewCellSelectionStyleNone;
+                    toggleCell.textLabel.text = @"消息防撤回";
+                    toggleCell.textLabel.font = [UIFont systemFontOfSize:17];
+                    toggleCell.detailTextLabel.text = enabled ? @"已开启" : @"已关闭";
+                    toggleCell.detailTextLabel.textColor = enabled ? [UIColor colorWithRed:0.2 green:0.6 blue:1.0 alpha:1.0] : [UIColor grayColor];
+                    toggleCell.accessoryView = [[UISwitch alloc] init];
+                    toggleCell.separatorInset = UIEdgeInsetsZero;
+                    
+                    UISwitch *toggleSwitch = (UISwitch *)toggleCell.accessoryView;
+                    toggleSwitch.on = enabled;
+                    toggleSwitch.onTintColor = [UIColor colorWithRed:0.2 green:0.6 blue:1.0 alpha:1.0];
+                    
+                    AntiRevokeToggleHelper *toggleHelper = [[AntiRevokeToggleHelper alloc] init];
+                    toggleHelper.toggleSwitch = toggleSwitch;
+                    [toggleSwitch addTarget:toggleHelper action:@selector(switchToggled:) forControlEvents:UIControlEventValueChanged];
+                    
+                    // 插入到第一组末尾
+                    NSInteger section = 0;
+                    NSInteger rowCount = [tableView numberOfRowsInSection:section];
+                    [tableView insertRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:rowCount inSection:section]]
+                                          withRowAnimation:UITableViewRowAnimationFade];
+                    
+                    objc_setAssociatedObject(self, "AntiRevokeToggleCell", toggleCell, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                    objc_setAssociatedObject(self, "AntiRevokeToggleHelper", toggleHelper, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                    
+                    NSLog(@"[AntiRevoke] 设置页开关注入成功");
+                } @catch (NSException *exception) {
+                    NSLog(@"[AntiRevoke] 设置页注入异常: %@", exception.reason);
+                }
+            });
+        });
+        
+        class_replaceMethod(settingsVCClass, viewDidLoadSel, newImp, method_getTypeEncoding(origMethod));
+    });
+}
+
+#pragma mark - 6. 动态加载与生命周期绑定
 
 static void performDynamicAntiRevoke() {
     static BOOL hasInjected = NO;
     if (hasInjected) return;
     
-    if (NSClassFromString(@"WKSystemMessageHandler") || NSClassFromString(@"WKMessageDB")) {
-        NSLog(@"[AntiRevoke] 开始动态加载防撤回痕迹全套模块...");
+    if (NSClassFromString(@"WKMessageDB") || NSClassFromString(@"WKMessage")) {
+        NSLog(@"[AntiRevoke] 开始挂载防撤回+显痕迹双擎核心...");
         
-        // 核心劫持点：在底层主数据库准备将消息标记为撤回时实施拦截并注入痕迹
-        safeSwizzleAndSave(@"WKMessageDB", @"updateMessageRevoke:clientMsgNo:", (IMP)hook_updateMessageRevoke_clientMsgNo, (IMP *)&orig_updateMessageRevoke_clientMsgNo, "v@:@@");
+        // 1. 拦截底层数据库写入，阻断 revoke 标记，记录黑名单
+        safeSwizzleAndSave(@"WKMessageDB", @"updateMessageRevoke:clientMsgNo:", (IMP)hook_updateMessageRevoke, (IMP *)&orig_updateMessageRevoke, "v@:@@");
         
-        // 传入合法的 dummy_extra_imp 彻底斩断扩展表对历史状态的强行覆盖
+        // 2. 拦截消息模型的 content 读取，动态为黑名单消息加尾巴
+        safeSwizzleAndSave(@"WKMessage", @"content", (IMP)hook_WKMessage_content, (IMP *)&orig_WKMessage_content, "@@:");
+        
+        // 3. 彻底阻断历史漫游拉取时的扩展表状态覆盖
         safeSwizzleAndSave(@"WKMessageExtraDB", @"addOrUpdateMessageRevokeExtras:", (IMP)dummy_extra_imp, NULL, "v@:@");
         
         hasInjected = YES;
@@ -247,10 +288,10 @@ static void performDynamicAntiRevoke() {
     }
 }
 
-#pragma mark - 5. 构造初始化入口
+#pragma mark - 7. 构造初始化入口
 
 %ctor {
-    if (NSClassFromString(@"WKSystemMessageHandler")) {
+    if (NSClassFromString(@"WKMessageDB")) {
         performDynamicAntiRevoke();
     } else {
         launchObserver = [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidFinishLaunchingNotification
