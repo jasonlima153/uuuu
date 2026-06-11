@@ -37,10 +37,11 @@ static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) 
     }
     NSLog(@"[UUUVoiceFun] Channel 真实类型: %@", NSStringFromClass([channel class]));
 
-    NSMutableData *dummyWaveform = [NSMutableData dataWithCapacity:100];
+    // 【修复 JSON 崩溃】：波形必须是 NSArray，NSData 会导致底层 JSON 序列化异常
+    NSMutableArray *safeWaveform = [NSMutableArray arrayWithCapacity:100];
     for (int i = 0; i < 100; i++) {
         uint8_t val = (uint8_t)(sin(i * 0.2) * 20 + 30 + arc4random_uniform(10));
-        [dummyWaveform appendBytes:&val length:1];
+        [safeWaveform addObject:@(val)];
     }
 
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -62,7 +63,7 @@ static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) 
                 [inv setSelector:initSel];
                 [inv setArgument:&amrData atIndex:2];
                 [inv setArgument:&duration atIndex:3];
-                [inv setArgument:&dummyWaveform atIndex:4];
+                [inv setArgument:&safeWaveform atIndex:4];
                 [inv invoke];
                 __unsafe_unretained id ret = nil;
                 [inv getReturnValue:&ret];
@@ -76,7 +77,7 @@ static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) 
                 [inv setSelector:initSel];
                 [inv setArgument:&amrData atIndex:2];
                 [inv setArgument:&duration atIndex:3];
-                [inv setArgument:&dummyWaveform atIndex:4];
+                [inv setArgument:&safeWaveform atIndex:4];
                 [inv invoke];
                 __unsafe_unretained id ret = nil;
                 [inv getReturnValue:&ret];
@@ -410,26 +411,33 @@ static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) 
                 }
 
                 AVAudioFormat *outFormat = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatInt16 sampleRate:8000 channels:1 interleaved:YES];
+                AVAudioConverter *converter = [[AVAudioConverter alloc] initFromFormat:inFile.processingFormat toFormat:outFormat];
 
-                AVAudioFrameCount framesToRead = (AVAudioFrameCount)MIN(inFile.length, inFile.fileFormat.sampleRate * 60.0);
-                AVAudioPCMBuffer *inBuffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:inFile.processingFormat frameCapacity:framesToRead];
-                [inFile readIntoBuffer:inBuffer frameCount:framesToRead error:nil];
+                // 【绝杀修复】：4096 帧切片循环转换，防止 AVAudioConverter 内存超载丢帧
+                NSMutableData *fullPcmData = [NSMutableData data];
+                AVAudioFrameCount chunkSize = 4096;
+                AVAudioPCMBuffer *inBuf = [[AVAudioPCMBuffer alloc] initWithPCMFormat:inFile.processingFormat frameCapacity:chunkSize];
+                AVAudioPCMBuffer *outBuf = [[AVAudioPCMBuffer alloc] initWithPCMFormat:outFormat frameCapacity:chunkSize];
 
-                AVAudioConverter *converter = [[AVAudioConverter alloc] initFromFormat:inBuffer.format toFormat:outFormat];
-                AVAudioFrameCount outFrames = (AVAudioFrameCount)(framesToRead * (8000.0 / inFile.fileFormat.sampleRate));
-                AVAudioPCMBuffer *outBuffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:outFormat frameCapacity:MAX(100, outFrames)];
+                while (inFile.framePosition < inFile.length && (inFile.framePosition / inFile.fileFormat.sampleRate) < 60.0) {
+                    NSError *err = nil;
+                    [inFile readIntoBuffer:inBuf frameCount:chunkSize error:&err];
+                    if (err || inBuf.frameLength == 0) break;
 
-                __block BOOL inputGiven = NO;
-                [converter convertToBuffer:outBuffer error:nil withInputFromBlock:^AVAudioBuffer *(AVAudioPacketCount p, AVAudioConverterInputStatus *outStatus) {
-                    if (inputGiven) { *outStatus = AVAudioConverterInputStatus_EndOfStream; return nil; }
-                    inputGiven = YES;
-                    *outStatus = AVAudioConverterInputStatus_HaveData;
-                    return inBuffer;
-                }];
+                    __block BOOL consumed = NO;
+                    [converter convertToBuffer:outBuf error:nil withInputFromBlock:^AVAudioBuffer *(AVAudioPacketCount p, AVAudioConverterInputStatus *outStatus) {
+                        if (consumed) { *outStatus = AVAudioConverterInputStatus_EndOfStream; return nil; }
+                        consumed = YES;
+                        *outStatus = AVAudioConverterInputStatus_HaveData;
+                        return inBuf;
+                    }];
 
-                // 提取纯净 PCM 裸流
-                NSData *pcmData = [NSData dataWithBytes:outBuffer.int16ChannelData[0] length:outBuffer.frameLength * 2];
-                NSInteger duration = MAX(1, MIN((NSInteger)(framesToRead / inFile.fileFormat.sampleRate), 60));
+                    if (outBuf.frameLength > 0) {
+                        [fullPcmData appendBytes:outBuf.int16ChannelData[0] length:outBuf.frameLength * 2];
+                    }
+                }
+
+                NSInteger duration = MAX(1, MIN((NSInteger)(inFile.length / inFile.fileFormat.sampleRate), 60));
 
                 // 手写 44 字节标准 WAV 头
                 NSString *tmpDir = NSTemporaryDirectory();
@@ -437,9 +445,9 @@ static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) 
                 NSString *amrPath = [tmpDir stringByAppendingPathComponent:@"pure_tmp.amr"];
                 [[NSFileManager defaultManager] removeItemAtPath:wavPath error:nil];
                 [[NSFileManager defaultManager] removeItemAtPath:amrPath error:nil];
-                [self createStrictWavFile:pcmData savePath:wavPath];
+                [self createStrictWavFile:fullPcmData savePath:wavPath];
 
-                // VoiceConverter 编码（WAV 头干净，不会闪退）
+                // VoiceConverter 编码
                 Class converterCls = NSClassFromString(@"VoiceConverter");
                 SEL encSel = NSSelectorFromString(@"EncodeWavToAmr:amrSavePath:sampleRateType:");
                 if ([converterCls respondsToSelector:encSel]) {
@@ -462,7 +470,6 @@ static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) 
                 [[NSFileManager defaultManager] removeItemAtPath:amrPath error:nil];
 
                 if (amrData && amrData.length >= 50) {
-                    // 打包为 Plist
                     NSString *name = [[fileURL lastPathComponent] stringByDeletingPathExtension];
                     NSDictionary *voiceItem = @{
                         @"name": name,
