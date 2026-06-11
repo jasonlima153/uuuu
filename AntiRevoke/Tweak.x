@@ -49,7 +49,7 @@ static BOOL isMsgInBlacklist(NSString *msgNo) {
     NSString *origContent = %orig;
     
     @try {
-        NSString *msgNo = [self valueForKey:@"clientMsgNo"];
+        NSString *msgNo = [(id)self valueForKey:@"clientMsgNo"];
         if (isMsgInBlacklist(msgNo)) {
             if ([origContent isKindOfClass:[NSString class]] && ![origContent containsString:@"\u26A0\uFE0F (\u5BF9\u65B9\u5C1D\u8BD5\u64A4\u56DE)"]) {
                 return [origContent stringByAppendingString:@" \n\u26A0\uFE0F (\u5BF9\u65B9\u5C1D\u8BD5\u64A4\u56DE)"];
@@ -63,7 +63,7 @@ static BOOL isMsgInBlacklist(NSString *msgNo) {
 - (id)remoteExtra {
     id extra = %orig;
     @try {
-        NSString *msgNo = [self valueForKey:@"clientMsgNo"];
+        NSString *msgNo = [(id)self valueForKey:@"clientMsgNo"];
         if (isMsgInBlacklist(msgNo) && extra) {
             [extra setValue:@(0) forKey:@"revoke"];
         }
@@ -74,7 +74,7 @@ static BOOL isMsgInBlacklist(NSString *msgNo) {
 - (NSInteger)contentType {
     NSInteger type = %orig;
     @try {
-        NSString *msgNo = [self valueForKey:@"clientMsgNo"];
+        NSString *msgNo = [(id)self valueForKey:@"clientMsgNo"];
         if (isMsgInBlacklist(msgNo) && type == 99) {
             return 1;
         }
