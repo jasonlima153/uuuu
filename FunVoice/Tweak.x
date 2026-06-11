@@ -24,10 +24,18 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
             id voiceContent = nil;
             SEL initSel = NSSelectorFromString(@"initWithData:second:waveform:");
             if ([voiceContentClass respondsToSelector:initSel]) {
-                #pragma clang diagnostic push
-                #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-                voiceContent = [voiceContentClass performSelector:initSel withObject:amrData withObject:@(duration) withObject:dummyWaveform];
-                #pragma clang diagnostic pop
+                NSMethodSignature *sig = [voiceContentClass methodSignatureForSelector:initSel];
+                NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+                [inv setTarget:[voiceContentClass alloc]];
+                [inv setSelector:initSel];
+                [inv setArgument:&amrData atIndex:2];
+                NSInteger dur = duration;
+                [inv setArgument:&dur atIndex:3];
+                [inv setArgument:&dummyWaveform atIndex:4];
+                [inv invoke];
+                __unsafe_unretained id result = nil;
+                [inv getReturnValue:&result];
+                voiceContent = result;
             }
 
             if (voiceContent) {
@@ -36,10 +44,14 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
                 id chatManager = [sharedSDK performSelector:NSSelectorFromString(@"chatManager")];
 
                 if (chatManager) {
-                    #pragma clang diagnostic push
-                    #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-                    [chatManager performSelector:NSSelectorFromString(@"sendMessage:channel:") withObject:voiceContent withObject:channel];
-                    #pragma clang diagnostic pop
+                    SEL sendSel = NSSelectorFromString(@"sendMessage:channel:");
+                    NSMethodSignature *sendSig = [chatManager methodSignatureForSelector:sendSel];
+                    NSInvocation *sendInv = [NSInvocation invocationWithMethodSignature:sendSig];
+                    [sendInv setTarget:chatManager];
+                    [sendInv setSelector:sendSel];
+                    [sendInv setArgument:&voiceContent atIndex:2];
+                    [sendInv setArgument:&channel atIndex:3];
+                    [sendInv invoke];
                     NSLog(@"[UUUVoiceFun] 趣味语音发送成功！");
                 }
             }
