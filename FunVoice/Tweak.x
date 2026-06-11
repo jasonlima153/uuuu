@@ -334,12 +334,29 @@ static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) 
 
     NSString *ext = fileURL.pathExtension.lowercaseString;
     if ([ext isEqualToString:@"mp3"]) {
+        // 【核心修复】：在释放安全权限前，先把 MP3 复制到本地临时目录
+        // 防止后台转码线程读取时权限已被系统回收，导致 0 字节空文件
+        NSString *localSafePath = [NSTemporaryDirectory() stringByAppendingPathComponent:fileURL.lastPathComponent];
+        [[NSFileManager defaultManager] removeItemAtPath:localSafePath error:nil];
+        NSError *copyErr = nil;
+        [[NSFileManager defaultManager] copyItemAtURL:fileURL toURL:[NSURL fileURLWithPath:localSafePath] error:&copyErr];
+        
+        if (accessed) [fileURL stopAccessingSecurityScopedResource];
+        
+        if (copyErr) {
+            NSLog(@"[UUUVoiceFun] MP3 复制到本地失败: %@", copyErr);
+            return;
+        }
+        
         UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"正在提纯转换..."
             message:@"正在将 MP3 净化为专属 Plist 语音包"
             preferredStyle:UIAlertControllerStyleAlert];
         [self presentViewController:alert animated:YES completion:nil];
 
-        [self convertMP3ToSafePlist:fileURL completion:^{
+        NSURL *safeLocalURL = [NSURL fileURLWithPath:localSafePath];
+        [self convertMP3ToSafePlist:safeLocalURL completion:^{
+            // 转换完毕后清理临时文件
+            [[NSFileManager defaultManager] removeItemAtPath:localSafePath error:nil];
             [alert dismissViewControllerAnimated:YES completion:^{
                 [self loadVoicePacks];
                 UIAlertController *success = [UIAlertController alertControllerWithTitle:@"转换成功"
@@ -353,15 +370,15 @@ static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) 
         NSString *destPath = [self.basePath stringByAppendingPathComponent:fileURL.lastPathComponent];
         [[NSFileManager defaultManager] copyItemAtURL:fileURL toURL:[NSURL fileURLWithPath:destPath] error:nil];
         [self loadVoicePacks];
+        if (accessed) [fileURL stopAccessingSecurityScopedResource];
     } else {
         UIAlertController *err = [UIAlertController alertControllerWithTitle:@"格式错误"
             message:@"请导入 MP3 音乐或 Plist 语音包"
             preferredStyle:UIAlertControllerStyleAlert];
         [err addAction:[UIAlertAction actionWithTitle:@"好的" style:UIAlertActionStyleCancel handler:nil]];
         [self presentViewController:err animated:YES completion:nil];
+        if (accessed) [fileURL stopAccessingSecurityScopedResource];
     }
-
-    if (accessed) [fileURL stopAccessingSecurityScopedResource];
 }
 
 #pragma mark - C 语言手写 44 字节标准 WAV 头
