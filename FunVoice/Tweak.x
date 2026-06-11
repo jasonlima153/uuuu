@@ -103,21 +103,16 @@
             Class voiceContentClass = NSClassFromString(@"WKVoiceContent");
             if (voiceContentClass) {
                 id voiceContent = nil;
-                SEL initSel = NSSelectorFromString(@"initWithData:second:waveform:");
-                if ([voiceContentClass respondsToSelector:initSel]) {
-                    #pragma clang diagnostic push
-                    #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-                    voiceContent = [voiceContentClass performSelector:initSel withObject:amrData withObject:@(voiceSecond) withObject:dummyWaveform];
-                    #pragma clang diagnostic pop
-                }
+                // 使用 objc_msgSend 直接调用 initWithData:second:waveform:，避免 performSelector 参数限制
+                voiceContent = ((id (*)(id, SEL, id, NSInteger, id))objc_msgSend)([voiceContentClass alloc], NSSelectorFromString(@"initWithData:second:waveform:"), amrData, voiceSecond, dummyWaveform);
 
                 Class sdkClass = NSClassFromString(@"WKSDK");
                 id sharedSDK = [sdkClass performSelector:NSSelectorFromString(@"shared")];
                 id chatManager = [sharedSDK performSelector:NSSelectorFromString(@"chatManager")];
 
                 if (chatManager && voiceContent) {
-                    void (*sendMessage)(id, SEL, id, id) = (void (*)(id, SEL, id, id))[chatManager methodForSelector:NSSelectorFromString(@"sendMessage:channel:")];
-                    sendMessage(chatManager, NSSelectorFromString(@"sendMessage:channel:"), voiceContent, self.currentChannel);
+                    // 使用 objc_msgSend 直接调用，避免 performSelector 参数限制
+                    ((void (*)(id, SEL, id, id))objc_msgSend)(chatManager, NSSelectorFromString(@"sendMessage:channel:"), voiceContent, self.currentChannel);
 
                     NSLog(@"[UUUVoiceFun] 趣味语音发送成功！时长: %ld秒", (long)voiceSecond);
                 }
