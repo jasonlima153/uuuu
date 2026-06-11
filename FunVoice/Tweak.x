@@ -325,30 +325,37 @@ static id safeInvoke(id target, SEL selector, NSArray *arguments) {
 
 @end
 
-#pragma mark - 4. 生命周期 Hook
+#pragma mark - 4. 生命周期 Hook (改绑绝对可靠的输入面板)
 
 %group UUUVoiceFunHooks
 
-%hook WKConversationViewController
+%hook WKConversationInputPanel
 
-- (void)viewDidAppear:(BOOL)animated {
+- (void)didMoveToWindow {
     %orig;
+
     dispatch_async(dispatch_get_main_queue(), ^{
-        UIWindow *targetWindow = self.view.window ?: [UIApplication sharedApplication].windows.firstObject;
-        if (targetWindow) {
-            UUUFloatingVoiceButton *btn = [UUUFloatingVoiceButton sharedButton];
-            btn.currentChatVC = (UIViewController *)self;
-            [targetWindow addSubview:btn];
-            [targetWindow bringSubviewToFront:btn];
-            btn.hidden = NO;
+        if (self.window) {
+            UIViewController *chatVC = nil;
+            UIResponder *responder = self;
+            while ((responder = [responder nextResponder])) {
+                if ([responder isKindOfClass:[UIViewController class]]) {
+                    chatVC = (UIViewController *)responder;
+                    break;
+                }
+            }
+
+            if (chatVC) {
+                UUUFloatingVoiceButton *btn = [UUUFloatingVoiceButton sharedButton];
+                btn.currentChatVC = chatVC;
+
+                [self.window addSubview:btn];
+                [self.window bringSubviewToFront:btn];
+                btn.hidden = NO;
+            }
+        } else {
+            [UUUFloatingVoiceButton sharedButton].hidden = YES;
         }
-    });
-}
-
-- (void)viewWillDisappear:(BOOL)animated {
-    %orig;
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [UUUFloatingVoiceButton sharedButton].hidden = YES;
     });
 }
 
@@ -362,7 +369,7 @@ static void initVoiceFunModule_once() {
     static BOOL initialized = NO;
     if (initialized) return;
 
-    if (NSClassFromString(@"WKConversationViewController")) {
+    if (NSClassFromString(@"WKConversationInputPanel")) {
         NSLog(@"[UUUVoiceFun] 动态激活趣味语音独立悬浮系统...");
         %init(UUUVoiceFunHooks);
         initialized = YES;
@@ -370,7 +377,7 @@ static void initVoiceFunModule_once() {
 }
 
 %ctor {
-    if (NSClassFromString(@"WKConversationViewController")) {
+    if (NSClassFromString(@"WKConversationInputPanel")) {
         initVoiceFunModule_once();
     } else {
         [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidFinishLaunchingNotification
