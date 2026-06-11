@@ -374,24 +374,11 @@ static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) 
 
 #pragma mark - 5. 模块初始化 (单点 %init)
 
-static void initVoiceFunModule_once() {
-    static BOOL initialized = NO;
-    if (initialized) return;
-    if (NSClassFromString(@"WKConversationVC")) {
-        %init(UUUVoiceFunHooks);
-        initialized = YES;
-    }
-}
-
 %ctor {
-    if (NSClassFromString(@"WKConversationVC")) {
-        initVoiceFunModule_once();
-    } else {
-        [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidFinishLaunchingNotification
-                                                         object:nil
-                                                          queue:nil
-                                                     usingBlock:^(NSNotification *note) {
-            initVoiceFunModule_once();
-        }];
-    }
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        if (NSClassFromString(@"WKConversationVC")) {
+            %init(UUUVoiceFunHooks);
+        }
+    });
 }
