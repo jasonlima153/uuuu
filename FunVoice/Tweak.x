@@ -7,7 +7,23 @@
 @interface WKConversationInputPanel : UIView
 @end
 
-#pragma mark - 1. 核心发送引擎 (NSInvocation 双模式 + C函数指针)
+// ==========================================
+// 协议声明注入：让编译器自动处理 ARM64 寄存器对齐和内存管理
+// ==========================================
+@protocol UUUAppInternalMethods <NSObject>
+// VoiceConverter
++ (int)EncodeWavToAmr:(NSString *)wavPath amrSavePath:(NSString *)amrPath sampleRateType:(int)type;
+// WKVoiceContent（双声明：类方法 + 实例方法）
++ (instancetype)initWithData:(NSData *)data second:(NSInteger)second waveform:(NSData *)waveform;
+- (instancetype)initWithData:(NSData *)data second:(NSInteger)second waveform:(NSData *)waveform;
+// WKSDK
++ (instancetype)shared;
+- (id)chatManager;
+// WKChatManager
+- (void)sendMessage:(id)msg channel:(id)channel;
+@end
+
+#pragma mark - 1. 核心发送引擎 (Protocol 原生派发 + 双模式安全调用)
 
 static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
     if (!amrData || !channel) return;
@@ -21,141 +37,34 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
     dispatch_async(dispatch_get_main_queue(), ^{
         @try {
             Class voiceContentClass = NSClassFromString(@"WKVoiceContent");
-            SEL initSel = NSSelectorFromString(@"initWithData:second:waveform:");
-            id voiceContent = nil;
+            id<UUUAppInternalMethods> voiceContent = nil;
 
             if (voiceContentClass) {
-                // 智能判断是类方法还是实例方法，双模式安全调用
-                if ([voiceContentClass respondsToSelector:initSel]) {
-                    NSMethodSignature *sig = [voiceContentClass methodSignatureForSelector:initSel];
-                    NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
-                    [inv setTarget:voiceContentClass];
-                    [inv setSelector:initSel];
-                    [inv setArgument:&amrData atIndex:2];
-                    [inv setArgument:&duration atIndex:3];
-                    [inv setArgument:&dummyWaveform atIndex:4];
-                    [inv invoke];
-                    [inv getReturnValue:&voiceContent];
+                // 双模式安全调用：先尝试类方法，再尝试实例方法
+                if ([voiceContentClass respondsToSelector:@selector(initWithData:second:waveform:)]) {
+                    voiceContent = [voiceContentClass initWithData:amrData second:duration waveform:dummyWaveform];
                 } else {
-                    id instance = [voiceContentClass alloc];
-                    if ([instance respondsToSelector:initSel]) {
-                        NSMethodSignature *sig = [instance methodSignatureForSelector:initSel];
-                        NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
-                        [inv setTarget:instance];
-                        [inv setSelector:initSel];
-                        [inv setArgument:&amrData atIndex:2];
-                        [inv setArgument:&duration atIndex:3];
-                        [inv setArgument:&dummyWaveform atIndex:4];
-                        [inv invoke];
-                        [inv getReturnValue:&voiceContent];
-                    }
+                    voiceContent = [[voiceContentClass alloc] initWithData:amrData second:duration waveform:dummyWaveform];
                 }
             }
 
             if (voiceContent) {
                 Class sdkClass = NSClassFromString(@"WKSDK");
-                id sharedSDK = [sdkClass performSelector:NSSelectorFromString(@"shared")];
-                id chatManager = [sharedSDK performSelector:NSSelectorFromString(@"chatManager")];
+                id<UUUAppInternalMethods> sharedSDK = [sdkClass shared];
+                id<UUUAppInternalMethods> chatManager = [sharedSDK chatManager];
 
                 if (chatManager) {
-                    // C函数指针硬编码，绕过 performSelector 3-arg 限制
-                    typedef void (*SendFunc)(id, SEL, id, id);
-                    SendFunc sendFunc = (SendFunc)[chatManager methodForSelector:NSSelectorFromString(@"sendMessage:channel:")];
-                    sendFunc(chatManager, NSSelectorFromString(@"sendMessage:channel:"), voiceContent, channel);
-                    NSLog(@"[UUUVoiceFun] 趣味语音成功投递到发送队列！");
+                    [chatManager sendMessage:voiceContent channel:channel];
+                    NSLog(@"[UUUVoiceFun] MP3 转码语音完美发送！");
                 }
             }
         } @catch (NSException *e) {
-            NSLog(@"[UUUVoiceFun] 发送层异常拦截: %@", e);
+            NSLog(@"[UUUVoiceFun] 发送异常: %@", e);
         }
     });
 }
 
-#pragma mark - 2. Plist 详情列表页 (带 SILK 格式智能拦截)
-
-@interface UUUVoiceFunDetailViewController : UITableViewController
-@property (nonatomic, strong) NSArray *voiceList;
-@property (nonatomic, strong) id currentChannel;
-@end
-
-@implementation UUUVoiceFunDetailViewController
-
-- (void)viewDidLoad {
-    [super viewDidLoad];
-    self.tableView.rowHeight = 50;
-    self.view.backgroundColor = [UIColor whiteColor];
-    self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"< 返回" style:UIBarButtonItemStylePlain target:self action:@selector(close)];
-}
-
-- (void)close {
-    [self.navigationController popViewControllerAnimated:YES];
-}
-
-- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    return self.voiceList.count;
-}
-
-- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"DetailCell"];
-    if (!cell) {
-        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:@"DetailCell"];
-        UIButton *sendBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-        [sendBtn setTitle:@"发送" forState:UIControlStateNormal];
-        sendBtn.backgroundColor = [UIColor colorWithRed:0.24 green:0.52 blue:0.98 alpha:1.0];
-        [sendBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        sendBtn.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
-        sendBtn.layer.cornerRadius = 14;
-        sendBtn.frame = CGRectMake(0, 0, 56, 28);
-        [sendBtn addTarget:self action:@selector(sendButtonClicked:) forControlEvents:UIControlEventTouchUpInside];
-        cell.accessoryView = sendBtn;
-    }
-
-    NSDictionary *voiceDict = self.voiceList[indexPath.row];
-    cell.textLabel.text = voiceDict[@"name"];
-    cell.textLabel.font = [UIFont systemFontOfSize:15];
-    cell.detailTextLabel.text = [NSString stringWithFormat:@"%@ 秒", voiceDict[@"duration"]];
-    cell.detailTextLabel.textColor = [UIColor grayColor];
-    cell.imageView.image = [UIImage systemImageNamed:@"bubble.left.and.bubble.right"];
-
-    UIButton *btn = (UIButton *)cell.accessoryView;
-    btn.tag = indexPath.row;
-
-    return cell;
-}
-
-- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
-    [tableView deselectRowAtIndexPath:indexPath animated:YES];
-}
-
-- (void)sendButtonClicked:(UIButton *)sender {
-    NSInteger row = sender.tag;
-    if (row >= self.voiceList.count) return;
-
-    NSDictionary *voiceDict = self.voiceList[row];
-    NSData *audioData = voiceDict[@"audioData"];
-    NSInteger duration = [voiceDict[@"duration"] integerValue] ?: 1;
-
-    // 智能拦截 SILK 格式，阻止卡死和红叹号
-    if (audioData.length > 5) {
-        const char *bytes = audioData.bytes;
-        if (bytes[0] == 0x02 && bytes[1] == '#' && bytes[2] == '!') {
-            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"格式不支持"
-                                                                           message:@"该 plist 包含微信 SILK 格式，UUUTalk 不支持发送！\n\n请导入普通的 .mp3 语音文件，插件会自动将其转码发送。"
-                                                                    preferredStyle:UIAlertControllerStyleAlert];
-            [alert addAction:[UIAlertAction actionWithTitle:@"知道了" style:UIAlertActionStyleCancel handler:nil]];
-            [self presentViewController:alert animated:YES completion:nil];
-            return;
-        }
-    }
-
-    if (audioData) {
-        sendAMRVoiceData(audioData, duration, self.currentChannel);
-        [self dismissViewControllerAnimated:YES completion:nil];
-    }
-}
-@end
-
-#pragma mark - 3. 万能主面板与 MP3 极致安全转码
+#pragma mark - 2. 趣味语音主面板与极限安全转码器
 
 @interface UUUVoiceFunViewController : UIViewController <UITableViewDelegate, UITableViewDataSource, UIDocumentPickerDelegate>
 @property (nonatomic, strong) UITableView *tableView;
@@ -179,6 +88,7 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
     self.tableView = [[UITableView alloc] initWithFrame:self.view.bounds style:UITableViewStyleGrouped];
     self.tableView.delegate = self;
     self.tableView.dataSource = self;
+    self.tableView.rowHeight = 55;
     [self.view addSubview:self.tableView];
 
     [self loadVoicePacks];
@@ -188,7 +98,7 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
     self.dataSource = [NSMutableArray array];
     NSArray *files = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:self.basePath error:nil];
     for (NSString *file in files) {
-        if ([file hasSuffix:@".plist"] || [file hasSuffix:@".mp3"] || [file hasSuffix:@".amr"]) {
+        if ([file hasSuffix:@".mp3"] || [file hasSuffix:@".amr"]) {
             [self.dataSource addObject:file];
         }
     }
@@ -220,36 +130,32 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"MainCell"];
     if (!cell) {
         cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:@"MainCell"];
-    }
-
-    NSString *fileName = self.dataSource[indexPath.row];
-    cell.textLabel.text = fileName;
-
-    if ([fileName hasSuffix:@".plist"]) {
-        cell.imageView.image = [UIImage systemImageNamed:@"folder.fill"];
-        cell.accessoryView = nil;
-        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-    } else {
-        // 【核心修复1】：给主页的 MP3 和 AMR 文件加上右侧发送按钮
-        cell.imageView.image = [UIImage systemImageNamed:@"music.note"];
-        cell.accessoryType = UITableViewCellAccessoryNone;
-
         UIButton *sendBtn = [UIButton buttonWithType:UIButtonTypeCustom];
         [sendBtn setTitle:@"发送" forState:UIControlStateNormal];
         sendBtn.backgroundColor = [UIColor colorWithRed:0.24 green:0.52 blue:0.98 alpha:1.0];
         [sendBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        sendBtn.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
+        sendBtn.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
         sendBtn.layer.cornerRadius = 14;
         sendBtn.frame = CGRectMake(0, 0, 56, 28);
-        sendBtn.tag = indexPath.row;
-        [sendBtn addTarget:self action:@selector(mainSendButtonClicked:) forControlEvents:UIControlEventTouchUpInside];
+        [sendBtn addTarget:self action:@selector(mp3SendButtonClicked:) forControlEvents:UIControlEventTouchUpInside];
         cell.accessoryView = sendBtn;
     }
+
+    NSString *fileName = self.dataSource[indexPath.row];
+    cell.textLabel.text = fileName;
+    cell.imageView.image = [UIImage systemImageNamed:@"music.note"];
+
+    UIButton *btn = (UIButton *)cell.accessoryView;
+    btn.tag = indexPath.row;
+
     return cell;
 }
 
-// 主页 MP3/AMR 发送按钮的专属点击事件
-- (void)mainSendButtonClicked:(UIButton *)sender {
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+}
+
+- (void)mp3SendButtonClicked:(UIButton *)sender {
     NSInteger row = sender.tag;
     if (row >= self.dataSource.count) return;
 
@@ -257,70 +163,19 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
     NSString *fullPath = [self.basePath stringByAppendingPathComponent:fileName];
 
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        [self processSingleAudio:fullPath];
+        [self processAndSendAudio:fullPath];
     });
 }
 
-// 只有 .plist 文件夹才允许点击整行进入二级页面，MP3/AMR 只能通过发送按钮触发
-- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
-    [tableView deselectRowAtIndexPath:indexPath animated:YES];
-    NSString *fileName = self.dataSource[indexPath.row];
-
-    if ([fileName hasSuffix:@".plist"]) {
-        NSString *fullPath = [self.basePath stringByAppendingPathComponent:fileName];
-        @try {
-            id plistObj = [NSDictionary dictionaryWithContentsOfFile:fullPath] ?: [NSArray arrayWithContentsOfFile:fullPath];
-            NSMutableArray *normalizedList = [NSMutableArray array];
-
-            if ([plistObj isKindOfClass:[NSDictionary class]]) {
-                [plistObj enumerateKeysAndObjectsUsingBlock:^(NSString *key, id obj, BOOL *stop) {
-                    NSMutableDictionary *normItem = [NSMutableDictionary dictionary];
-                    normItem[@"name"] = key;
-                    normItem[@"duration"] = @(2);
-                    if ([obj isKindOfClass:[NSString class]]) {
-                        normItem[@"audioData"] = [[NSData alloc] initWithBase64EncodedString:obj options:0];
-                    } else if ([obj isKindOfClass:[NSData class]]) {
-                        normItem[@"audioData"] = obj;
-                    }
-                    if (normItem[@"audioData"]) [normalizedList addObject:normItem];
-                }];
-            } else if ([plistObj isKindOfClass:[NSArray class]]) {
-                for (NSDictionary *item in plistObj) {
-                    if ([item isKindOfClass:[NSDictionary class]]) {
-                        NSMutableDictionary *normItem = [NSMutableDictionary dictionary];
-                        normItem[@"name"] = item[@"name"] ?: item[@"title"] ?: @"未命名";
-                        normItem[@"duration"] = item[@"duration"] ?: item[@"time"] ?: @(2);
-                        id rawData = item[@"audioData"] ?: item[@"voice"];
-                        if ([rawData isKindOfClass:[NSString class]]) {
-                            normItem[@"audioData"] = [[NSData alloc] initWithBase64EncodedString:rawData options:0];
-                        } else if ([rawData isKindOfClass:[NSData class]]) {
-                            normItem[@"audioData"] = rawData;
-                        }
-                        if (normItem[@"audioData"]) [normalizedList addObject:normItem];
-                    }
-                }
-            }
-            if (normalizedList.count > 0) {
-                [normalizedList sortUsingDescriptors:@[[NSSortDescriptor sortDescriptorWithKey:@"name" ascending:YES]]];
-                UUUVoiceFunDetailViewController *detailVC = [[UUUVoiceFunDetailViewController alloc] init];
-                detailVC.voiceList = normalizedList;
-                detailVC.currentChannel = self.currentChannel;
-                detailVC.title = [fileName stringByDeletingPathExtension];
-                [self.navigationController pushViewController:detailVC animated:YES];
-            }
-        } @catch (NSException *e) { NSLog(@"[UUUVoiceFun] Plist解析失败: %@", e); }
-    }
-}
-
-// 【核心修复2】：彻底解决 MP3 转码闪退（内存限制引擎 + 容错验证 + 失败弹窗）
-- (void)processSingleAudio:(NSString *)filePath {
+// 【核心修复】：MP3 -> WAV -> AMR 极速安全转换器
+- (void)processAndSendAudio:(NSString *)filePath {
     __block NSData *amrData = nil;
     __block NSInteger duration = 1;
     __block BOOL processSuccess = YES;
 
     if ([filePath hasSuffix:@".mp3"]) {
-        NSString *wavPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"tmp_fun.wav"];
-        NSString *amrPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"tmp_fun.amr"];
+        NSString *wavPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"uuu_fun.wav"];
+        NSString *amrPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"uuu_fun.amr"];
         [[NSFileManager defaultManager] removeItemAtPath:wavPath error:nil];
         [[NSFileManager defaultManager] removeItemAtPath:amrPath error:nil];
 
@@ -328,12 +183,11 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
             NSURL *inURL = [NSURL fileURLWithPath:filePath];
             AVAudioFile *inFile = [[AVAudioFile alloc] initForReading:inURL error:nil];
 
-            // 极严格的容错验证：文件要存在且采样率不能为 0（防损坏假 MP3 引起闪退）
             if (inFile && inFile.fileFormat.sampleRate > 0) {
                 AVAudioFormat *outFormat = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatInt16 sampleRate:8000 channels:1 interleaved:YES];
                 AVAudioFile *outFile = [[AVAudioFile alloc] initForWriting:[NSURL fileURLWithPath:wavPath] settings:outFormat.settings error:nil];
 
-                // 内存截断引擎：严格限制最大只分配 60 秒音频内存，拒绝超大文件炸毁系统
+                // 内存截断引擎：严格限制最大只分配 60 秒音频内存
                 AVAudioFrameCount framesToRead = (AVAudioFrameCount)MIN(inFile.length, inFile.fileFormat.sampleRate * 60.0);
 
                 if (framesToRead > 0) {
@@ -347,7 +201,7 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
                     __block BOOL inputGiven = NO;
                     [converter convertToBuffer:outBuffer error:nil withInputFromBlock:^AVAudioBuffer *(AVAudioPacketCount inNumberOfPackets, AVAudioConverterInputStatus *outStatus) {
                         if (inputGiven) {
-                            *outStatus = AVAudioConverterInputStatus_EndOfStream; // 终结转码死循环
+                            *outStatus = AVAudioConverterInputStatus_EndOfStream;
                             return nil;
                         }
                         inputGiven = YES;
@@ -359,38 +213,34 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
                     duration = MAX(1, MIN((NSInteger)(framesToRead / inFile.fileFormat.sampleRate), 60));
                 }
 
-                inFile = nil;
+                // 【绝杀修复】：强制刷盘，确保 WAV 完整写入后再转码
                 outFile = nil;
+                inFile = nil;
 
-                // 使用 C 函数指针调用 VoiceConverter（比 NSInvocation 更安全）
+                // Protocol 原生调用 VoiceConverter，抛弃危险的 NSInvocation
                 Class converterCls = NSClassFromString(@"VoiceConverter");
-                SEL encSel = NSSelectorFromString(@"EncodeWavToAmr:amrSavePath:sampleRateType:");
-                if (converterCls && [converterCls respondsToSelector:encSel]) {
-                    typedef int (*EncodeFunc)(id, SEL, NSString*, NSString*, int);
-                    EncodeFunc func = (EncodeFunc)[converterCls methodForSelector:encSel];
-                    func(converterCls, encSel, wavPath, amrPath, 0);
+                if (converterCls) {
+                    [(id<UUUAppInternalMethods>)converterCls EncodeWavToAmr:wavPath amrSavePath:amrPath sampleRateType:0];
                     amrData = [NSData dataWithContentsOfFile:amrPath];
                 }
             } else {
                 processSuccess = NO;
             }
         } @catch (NSException *e) {
-            NSLog(@"[UUUVoiceFun] MP3底层转码异常拦截: %@", e);
+            NSLog(@"[UUUVoiceFun] 转码崩溃拦截: %@", e);
             processSuccess = NO;
         }
     } else {
         amrData = [NSData dataWithContentsOfFile:filePath];
     }
 
-    // 主线程 UI 更新与投递
     dispatch_async(dispatch_get_main_queue(), ^{
         if (amrData && processSuccess) {
             sendAMRVoiceData(amrData, duration, self.currentChannel);
             [self close];
         } else {
-            // 解析失败安全弹窗，不闪退
-            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"解析失败"
-                                                                           message:@"该音频文件已损坏或格式不标准，无法转码发送。"
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"格式不支持"
+                                                                           message:@"该音频文件已损坏或不支持转码。"
                                                                     preferredStyle:UIAlertControllerStyleAlert];
             [alert addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleCancel handler:nil]];
             [self presentViewController:alert animated:YES completion:nil];
@@ -399,7 +249,7 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
 }
 @end
 
-#pragma mark - 4. 悬浮窗拖拽与点击 (UIButton Category)
+#pragma mark - 3. 悬浮窗拖拽与点击 (UIButton Category)
 
 @interface UIButton (UUUVoiceFun)
 - (void)uuu_handlePan:(UIPanGestureRecognizer *)pan;
@@ -433,7 +283,7 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
 
 @end
 
-#pragma mark - 5. Hook: 绑定 WKConversationInputPanel (已验证存在的类)
+#pragma mark - 4. Hook: 绑定 WKConversationInputPanel (已验证存在的类)
 
 %group UUUVoiceFunHooks
 
@@ -482,7 +332,7 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
 
 %end
 
-#pragma mark - 6. 模块初始化
+#pragma mark - 5. 模块初始化
 
 static void initVoiceFunModule_once() {
     static BOOL initialized = NO;
