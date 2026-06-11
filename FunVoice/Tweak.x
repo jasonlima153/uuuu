@@ -23,7 +23,7 @@ static void dumpMethodsForClass(Class cls, BOOL isClassMethod) {
     NSLog(@"%@", logStr);
 }
 
-#pragma mark - 2. 核心发送引擎 (全链路运行时自检)
+#pragma mark - 2. 核心发送引擎 (全链路运行时自检，0计算)
 
 static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) {
     if (!amrData || !channel) {
@@ -122,7 +122,7 @@ static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) 
     });
 }
 
-#pragma mark - 3. Plist 详情列表页
+#pragma mark - 3. Plist 详情列表页 (带 SILK 拦截)
 
 @interface UUUVoiceFunDetailViewController : UITableViewController
 @property (nonatomic, strong) NSArray *voiceList;
@@ -133,7 +133,7 @@ static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) 
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.tableView.rowHeight = 50;
+    self.tableView.rowHeight = 55;
     self.view.backgroundColor = [UIColor whiteColor];
     self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"< 返回" style:UIBarButtonItemStylePlain target:self action:@selector(close)];
 }
@@ -150,7 +150,7 @@ static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) 
         [sendBtn setTitle:@"发送" forState:UIControlStateNormal];
         sendBtn.backgroundColor = [UIColor colorWithRed:0.24 green:0.52 blue:0.98 alpha:1.0];
         [sendBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        sendBtn.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
+        sendBtn.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
         sendBtn.layer.cornerRadius = 14;
         sendBtn.frame = CGRectMake(0, 0, 56, 28);
         [sendBtn addTarget:self action:@selector(sendButtonClicked:) forControlEvents:UIControlEventTouchUpInside];
@@ -159,14 +159,12 @@ static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) 
 
     NSDictionary *voiceDict = self.voiceList[indexPath.row];
     cell.textLabel.text = voiceDict[@"name"];
-    cell.textLabel.font = [UIFont systemFontOfSize:15];
+    cell.textLabel.font = [UIFont systemFontOfSize:16];
     cell.detailTextLabel.text = [NSString stringWithFormat:@"%@ 秒", voiceDict[@"duration"]];
     cell.detailTextLabel.textColor = [UIColor grayColor];
     cell.imageView.image = [UIImage systemImageNamed:@"bubble.left.and.bubble.right"];
 
-    UIButton *btn = (UIButton *)cell.accessoryView;
-    btn.tag = indexPath.row;
-
+    ((UIButton *)cell.accessoryView).tag = indexPath.row;
     return cell;
 }
 
@@ -180,6 +178,19 @@ static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) 
     NSData *audioData = voiceDict[@"audioData"];
     NSInteger duration = [voiceDict[@"duration"] integerValue] ?: 1;
 
+    // SILK 格式拦截：微信提取的 Plist 含 SILK 编码，服务器不认
+    if (audioData.length > 5) {
+        const char *bytes = audioData.bytes;
+        if (bytes[0] == 0x02 && bytes[1] == '#' && bytes[2] == '!') {
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"格式警告"
+                message:@"该语音为 SILK 格式（通常来自微信），服务器无法识别。\n请导入普通 MP3 文件，插件会自动转换为兼容格式。"
+                preferredStyle:UIAlertControllerStyleAlert];
+            [alert addAction:[UIAlertAction actionWithTitle:@"知道了" style:UIAlertActionStyleCancel handler:nil]];
+            [self presentViewController:alert animated:YES completion:nil];
+            return;
+        }
+    }
+
     if (audioData) {
         verifyAndSendVoice(audioData, duration, self.currentChannel);
         [self dismissViewControllerAnimated:YES completion:nil];
@@ -187,7 +198,7 @@ static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) 
 }
 @end
 
-#pragma mark - 4. 趣味语音主面板 (MP3 + Plist 双引擎)
+#pragma mark - 4. 主面板：MP3 导入净化引擎 + Plist 展示
 
 @interface UUUVoiceFunViewController : UIViewController <UITableViewDelegate, UITableViewDataSource, UIDocumentPickerDelegate>
 @property (nonatomic, strong) UITableView *tableView;
@@ -203,7 +214,7 @@ static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) 
     self.title = @"趣味语音";
     self.view.backgroundColor = [UIColor groupTableViewBackgroundColor];
     self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"< 关闭" style:UIBarButtonItemStylePlain target:self action:@selector(close)];
-    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"导入语音" style:UIBarButtonItemStylePlain target:self action:@selector(importVoice)];
+    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"导入MP3/Plist" style:UIBarButtonItemStylePlain target:self action:@selector(importVoice)];
 
     self.basePath = [[NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject] stringByAppendingPathComponent:@"趣味语音包"];
     [[NSFileManager defaultManager] createDirectoryAtPath:self.basePath withIntermediateDirectories:YES attributes:nil error:nil];
@@ -211,7 +222,7 @@ static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) 
     self.tableView = [[UITableView alloc] initWithFrame:self.view.bounds style:UITableViewStyleGrouped];
     self.tableView.delegate = self;
     self.tableView.dataSource = self;
-    self.tableView.rowHeight = 55;
+    self.tableView.rowHeight = 60;
     [self.view addSubview:self.tableView];
 
     [self loadVoicePacks];
@@ -221,7 +232,7 @@ static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) 
     self.dataSource = [NSMutableArray array];
     NSArray *files = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:self.basePath error:nil];
     for (NSString *file in files) {
-        if ([file hasSuffix:@".mp3"] || [file hasSuffix:@".amr"] || [file hasSuffix:@".plist"]) {
+        if ([file hasSuffix:@".plist"]) {
             [self.dataSource addObject:file];
         }
     }
@@ -244,13 +255,158 @@ static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) 
     if (!fileURL) return;
 
     BOOL accessed = [fileURL startAccessingSecurityScopedResource];
-    NSString *destPath = [self.basePath stringByAppendingPathComponent:fileURL.lastPathComponent];
-    [[NSFileManager defaultManager] copyItemAtURL:fileURL toURL:[NSURL fileURLWithPath:destPath] error:nil];
-    if (accessed) {
-        [fileURL stopAccessingSecurityScopedResource];
+
+    NSString *ext = fileURL.pathExtension.lowercaseString;
+    if ([ext isEqualToString:@"mp3"]) {
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"正在提纯转换..."
+            message:@"正在将 MP3 净化为专属 Plist 语音包"
+            preferredStyle:UIAlertControllerStyleAlert];
+        [self presentViewController:alert animated:YES completion:nil];
+
+        [self convertMP3ToSafePlist:fileURL completion:^{
+            [alert dismissViewControllerAnimated:YES completion:^{
+                [self loadVoicePacks];
+                UIAlertController *success = [UIAlertController alertControllerWithTitle:@"转换成功"
+                    message:@"MP3 已成功打包为安全的 Plist，发送绝不闪退！"
+                    preferredStyle:UIAlertControllerStyleAlert];
+                [success addAction:[UIAlertAction actionWithTitle:@"去发送" style:UIAlertActionStyleCancel handler:nil]];
+                [self presentViewController:success animated:YES completion:nil];
+            }];
+        }];
+    } else if ([ext isEqualToString:@"plist"]) {
+        NSString *destPath = [self.basePath stringByAppendingPathComponent:fileURL.lastPathComponent];
+        [[NSFileManager defaultManager] copyItemAtURL:fileURL toURL:[NSURL fileURLWithPath:destPath] error:nil];
+        [self loadVoicePacks];
+    } else {
+        UIAlertController *err = [UIAlertController alertControllerWithTitle:@"格式错误"
+            message:@"请导入 MP3 音乐或 Plist 语音包"
+            preferredStyle:UIAlertControllerStyleAlert];
+        [err addAction:[UIAlertAction actionWithTitle:@"好的" style:UIAlertActionStyleCancel handler:nil]];
+        [self presentViewController:err animated:YES completion:nil];
     }
 
-    [self loadVoicePacks];
+    if (accessed) [fileURL stopAccessingSecurityScopedResource];
+}
+
+#pragma mark - C 语言手写 44 字节标准 WAV 头
+
+- (BOOL)createStrictWavFile:(NSData *)pcmData savePath:(NSString *)savePath {
+    if (!pcmData) return NO;
+    uint32_t dataSize = (uint32_t)pcmData.length;
+    NSMutableData *wavData = [NSMutableData dataWithCapacity:44 + dataSize];
+
+    uint32_t chunkSize = dataSize + 36;
+    uint32_t subchunk1Size = 16;
+    uint16_t audioFormat = 1; // PCM
+    uint16_t numChannels = 1;
+    uint32_t sampleRate = 8000;
+    uint32_t byteRate = 16000;
+    uint16_t blockAlign = 2;
+    uint16_t bitsPerSample = 16;
+
+    [wavData appendBytes:"RIFF" length:4];
+    [wavData appendBytes:&chunkSize length:4];
+    [wavData appendBytes:"WAVEfmt " length:8];
+    [wavData appendBytes:&subchunk1Size length:4];
+    [wavData appendBytes:&audioFormat length:2];
+    [wavData appendBytes:&numChannels length:2];
+    [wavData appendBytes:&sampleRate length:4];
+    [wavData appendBytes:&byteRate length:4];
+    [wavData appendBytes:&blockAlign length:2];
+    [wavData appendBytes:&bitsPerSample length:2];
+    [wavData appendBytes:"data" length:4];
+    [wavData appendBytes:&dataSize length:4];
+    [wavData appendData:pcmData];
+
+    return [wavData writeToFile:savePath atomically:YES];
+}
+
+#pragma mark - MP3 净化提纯引擎
+
+- (void)convertMP3ToSafePlist:(NSURL *)fileURL completion:(void(^)(void))completion {
+    NSString *basePath = self.basePath;
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+        @try {
+            @autoreleasepool {
+                AVAudioFile *inFile = [[AVAudioFile alloc] initForReading:fileURL error:nil];
+                if (!inFile || inFile.fileFormat.sampleRate == 0) {
+                    dispatch_async(dispatch_get_main_queue(), ^{ if (completion) completion(); });
+                    return;
+                }
+
+                AVAudioFormat *outFormat = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatInt16 sampleRate:8000 channels:1 interleaved:YES];
+
+                AVAudioFrameCount framesToRead = (AVAudioFrameCount)MIN(inFile.length, inFile.fileFormat.sampleRate * 60.0);
+                AVAudioPCMBuffer *inBuffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:inFile.processingFormat frameCapacity:framesToRead];
+                [inFile readIntoBuffer:inBuffer frameCount:framesToRead error:nil];
+
+                AVAudioConverter *converter = [[AVAudioConverter alloc] initFromFormat:inBuffer.format toFormat:outFormat];
+                AVAudioFrameCount outFrames = (AVAudioFrameCount)(framesToRead * (8000.0 / inFile.fileFormat.sampleRate));
+                AVAudioPCMBuffer *outBuffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:outFormat frameCapacity:MAX(100, outFrames)];
+
+                __block BOOL inputGiven = NO;
+                [converter convertToBuffer:outBuffer error:nil withInputFromBlock:^AVAudioBuffer *(AVAudioPacketCount p, AVAudioConverterInputStatus *outStatus) {
+                    if (inputGiven) { *outStatus = AVAudioConverterInputStatus_EndOfStream; return nil; }
+                    inputGiven = YES;
+                    *outStatus = AVAudioConverterInputStatus_HaveData;
+                    return inBuffer;
+                }];
+
+                // 提取纯净 PCM 裸流
+                NSData *pcmData = [NSData dataWithBytes:outBuffer.int16ChannelData[0] length:outBuffer.frameLength * 2];
+                NSInteger duration = MAX(1, MIN((NSInteger)(framesToRead / inFile.fileFormat.sampleRate), 60));
+
+                // 手写 44 字节标准 WAV 头
+                NSString *tmpDir = NSTemporaryDirectory();
+                NSString *wavPath = [tmpDir stringByAppendingPathComponent:@"pure_tmp.wav"];
+                NSString *amrPath = [tmpDir stringByAppendingPathComponent:@"pure_tmp.amr"];
+                [[NSFileManager defaultManager] removeItemAtPath:wavPath error:nil];
+                [[NSFileManager defaultManager] removeItemAtPath:amrPath error:nil];
+                [self createStrictWavFile:pcmData savePath:wavPath];
+
+                // VoiceConverter 编码（WAV 头干净，不会闪退）
+                Class converterCls = NSClassFromString(@"VoiceConverter");
+                SEL encSel = NSSelectorFromString(@"EncodeWavToAmr:amrSavePath:sampleRateType:");
+                if ([converterCls respondsToSelector:encSel]) {
+                    NSMethodSignature *sig = [converterCls methodSignatureForSelector:encSel];
+                    NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+                    [inv setTarget:converterCls];
+                    [inv setSelector:encSel];
+                    [inv setArgument:&wavPath atIndex:2];
+                    [inv setArgument:&amrPath atIndex:3];
+                    int type = 0;
+                    [inv setArgument:&type atIndex:4];
+                    [inv invoke];
+                } else {
+                    NSLog(@"[UUUVoiceFun] EncodeWavToAmr 不存在！扫描 VoiceConverter...");
+                    dumpMethodsForClass(converterCls, YES);
+                }
+
+                NSData *amrData = [NSData dataWithContentsOfFile:amrPath];
+                [[NSFileManager defaultManager] removeItemAtPath:wavPath error:nil];
+                [[NSFileManager defaultManager] removeItemAtPath:amrPath error:nil];
+
+                if (amrData && amrData.length > 0) {
+                    // 打包为 Plist
+                    NSString *name = [[fileURL lastPathComponent] stringByDeletingPathExtension];
+                    NSDictionary *voiceItem = @{
+                        @"name": name,
+                        @"duration": @(duration),
+                        @"audioData": amrData
+                    };
+                    NSString *plistPath = [basePath stringByAppendingPathComponent:[NSString stringWithFormat:@"%@.plist", name]];
+                    [@[voiceItem] writeToFile:plistPath atomically:YES];
+                    NSLog(@"[UUUVoiceFun] MP3 提纯成功: %@ (%ld字节, %ld秒)", name, (long)amrData.length, (long)duration);
+                }
+            }
+        } @catch (NSException *e) {
+            NSLog(@"[UUUVoiceFun] 提纯异常: %@", e);
+        }
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (completion) completion();
+        });
+    });
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { return self.dataSource.count; }
@@ -260,33 +416,10 @@ static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) 
     if (!cell) {
         cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:@"MainCell"];
     }
-
-    NSString *fileName = self.dataSource[indexPath.row];
-    cell.textLabel.text = fileName;
-
-    if ([fileName hasSuffix:@".plist"]) {
-        cell.imageView.image = [UIImage systemImageNamed:@"folder.fill"];
-        cell.accessoryView = nil;
-        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-    } else {
-        cell.imageView.image = [UIImage systemImageNamed:@"music.note"];
-        cell.accessoryType = UITableViewCellAccessoryNone;
-
-        UIButton *sendBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-        [sendBtn setTitle:@"发送" forState:UIControlStateNormal];
-        sendBtn.backgroundColor = [UIColor colorWithRed:0.24 green:0.52 blue:0.98 alpha:1.0];
-        [sendBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        sendBtn.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
-        sendBtn.layer.cornerRadius = 14;
-        sendBtn.frame = CGRectMake(0, 0, 56, 28);
-        [sendBtn addTarget:self action:@selector(mp3SendButtonClicked:) forControlEvents:UIControlEventTouchUpInside];
-        cell.accessoryView = sendBtn;
-    }
-
-    if (cell.accessoryView) {
-        ((UIButton *)cell.accessoryView).tag = indexPath.row;
-    }
-
+    cell.textLabel.text = self.dataSource[indexPath.row];
+    cell.textLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightMedium];
+    cell.imageView.image = [UIImage systemImageNamed:@"folder.fill"];
+    cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
     return cell;
 }
 
@@ -295,143 +428,54 @@ static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) 
     NSString *fileName = self.dataSource[indexPath.row];
     NSString *fullPath = [self.basePath stringByAppendingPathComponent:fileName];
 
-    if ([fileName hasSuffix:@".plist"]) {
-        @try {
-            id plistObj = [NSDictionary dictionaryWithContentsOfFile:fullPath] ?: [NSArray arrayWithContentsOfFile:fullPath];
-            NSMutableArray *normalizedList = [NSMutableArray array];
+    @try {
+        id plistObj = [NSDictionary dictionaryWithContentsOfFile:fullPath] ?: [NSArray arrayWithContentsOfFile:fullPath];
+        NSMutableArray *normalizedList = [NSMutableArray array];
 
-            if ([plistObj isKindOfClass:[NSDictionary class]]) {
-                [(NSDictionary *)plistObj enumerateKeysAndObjectsUsingBlock:^(NSString *key, id obj, BOOL *stop) {
+        if ([plistObj isKindOfClass:[NSDictionary class]]) {
+            [(NSDictionary *)plistObj enumerateKeysAndObjectsUsingBlock:^(NSString *key, id obj, BOOL *stop) {
+                NSMutableDictionary *normItem = [NSMutableDictionary dictionary];
+                normItem[@"name"] = key;
+                normItem[@"duration"] = @(2);
+                if ([obj isKindOfClass:[NSString class]]) {
+                    normItem[@"audioData"] = [[NSData alloc] initWithBase64EncodedString:obj options:0];
+                } else if ([obj isKindOfClass:[NSData class]]) {
+                    normItem[@"audioData"] = obj;
+                }
+                if (normItem[@"audioData"]) [normalizedList addObject:normItem];
+            }];
+        } else if ([plistObj isKindOfClass:[NSArray class]]) {
+            for (NSDictionary *item in (NSArray *)plistObj) {
+                if ([item isKindOfClass:[NSDictionary class]]) {
                     NSMutableDictionary *normItem = [NSMutableDictionary dictionary];
-                    normItem[@"name"] = key;
-                    normItem[@"duration"] = @(2);
-                    if ([obj isKindOfClass:[NSString class]]) {
-                        normItem[@"audioData"] = [[NSData alloc] initWithBase64EncodedString:obj options:0];
-                    } else if ([obj isKindOfClass:[NSData class]]) {
-                        normItem[@"audioData"] = obj;
+                    normItem[@"name"] = item[@"name"] ?: item[@"title"] ?: @"未命名";
+                    normItem[@"duration"] = item[@"duration"] ?: item[@"time"] ?: @(2);
+                    id rawData = item[@"audioData"] ?: item[@"voice"];
+                    if ([rawData isKindOfClass:[NSString class]]) {
+                        normItem[@"audioData"] = [[NSData alloc] initWithBase64EncodedString:rawData options:0];
+                    } else if ([rawData isKindOfClass:[NSData class]]) {
+                        normItem[@"audioData"] = rawData;
                     }
                     if (normItem[@"audioData"]) [normalizedList addObject:normItem];
-                }];
-            } else if ([plistObj isKindOfClass:[NSArray class]]) {
-                for (NSDictionary *item in plistObj) {
-                    if ([item isKindOfClass:[NSDictionary class]]) {
-                        NSMutableDictionary *normItem = [NSMutableDictionary dictionary];
-                        normItem[@"name"] = item[@"name"] ?: item[@"title"] ?: @"未命名";
-                        normItem[@"duration"] = item[@"duration"] ?: item[@"time"] ?: @(2);
-                        id rawData = item[@"audioData"] ?: item[@"voice"];
-                        if ([rawData isKindOfClass:[NSString class]]) {
-                            normItem[@"audioData"] = [[NSData alloc] initWithBase64EncodedString:rawData options:0];
-                        } else if ([rawData isKindOfClass:[NSData class]]) {
-                            normItem[@"audioData"] = rawData;
-                        }
-                        if (normItem[@"audioData"]) [normalizedList addObject:normItem];
-                    }
                 }
             }
-            if (normalizedList.count > 0) {
-                [normalizedList sortUsingDescriptors:@[[NSSortDescriptor sortDescriptorWithKey:@"name" ascending:YES]]];
-                UUUVoiceFunDetailViewController *detailVC = [[UUUVoiceFunDetailViewController alloc] init];
-                detailVC.voiceList = normalizedList;
-                detailVC.currentChannel = self.currentChannel;
-                detailVC.title = [fileName stringByDeletingPathExtension];
-                [self.navigationController pushViewController:detailVC animated:YES];
-            } else {
-                UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"提示" message:@"该 Plist 文件格式不兼容或为空" preferredStyle:UIAlertControllerStyleAlert];
-                [alert addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleCancel handler:nil]];
-                [self presentViewController:alert animated:YES completion:nil];
-            }
-        } @catch (NSException *e) { NSLog(@"[UUUVoiceFun] Plist解析失败: %@", e); }
-    }
-}
+        }
 
-- (void)mp3SendButtonClicked:(UIButton *)sender {
-    NSInteger row = sender.tag;
-    if (row >= self.dataSource.count) return;
-
-    NSString *fileName = self.dataSource[row];
-    NSString *fullPath = [self.basePath stringByAppendingPathComponent:fileName];
-
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        [self safeConvertAndSendAudio:fullPath];
-    });
-}
-
-- (void)safeConvertAndSendAudio:(NSString *)filePath {
-    __block NSData *amrData = nil;
-    __block NSInteger duration = 1;
-
-    if ([filePath hasSuffix:@".mp3"]) {
-        NSString *wavPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"safe_out.wav"];
-        NSString *amrPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"safe_out.amr"];
-        [[NSFileManager defaultManager] removeItemAtPath:wavPath error:nil];
-        [[NSFileManager defaultManager] removeItemAtPath:amrPath error:nil];
-
-        @try {
-            @autoreleasepool {
-                NSURL *inURL = [NSURL fileURLWithPath:filePath];
-                AVAudioFile *inFile = [[AVAudioFile alloc] initForReading:inURL error:nil];
-
-                if (inFile && inFile.fileFormat.sampleRate > 0) {
-                    AVAudioFormat *outFormat = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatInt16 sampleRate:8000 channels:1 interleaved:YES];
-                    AVAudioFile *outFile = [[AVAudioFile alloc] initForWriting:[NSURL fileURLWithPath:wavPath] settings:outFormat.settings error:nil];
-
-                    AVAudioFrameCount framesToRead = (AVAudioFrameCount)MIN(inFile.length, inFile.fileFormat.sampleRate * 60.0);
-
-                    if (framesToRead > 0) {
-                        AVAudioPCMBuffer *inBuffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:inFile.processingFormat frameCapacity:framesToRead];
-                        [inFile readIntoBuffer:inBuffer frameCount:framesToRead error:nil];
-
-                        AVAudioConverter *converter = [[AVAudioConverter alloc] initFromFormat:inBuffer.format toFormat:outFormat];
-                        AVAudioFrameCount outFrames = (AVAudioFrameCount)(framesToRead * (8000.0 / inFile.fileFormat.sampleRate));
-                        AVAudioPCMBuffer *outBuffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:outFormat frameCapacity:MAX(100, outFrames)];
-
-                        __block BOOL inputGiven = NO;
-                        [converter convertToBuffer:outBuffer error:nil withInputFromBlock:^AVAudioBuffer *(AVAudioPacketCount inNumberOfPackets, AVAudioConverterInputStatus *outStatus) {
-                            if (inputGiven) { *outStatus = AVAudioConverterInputStatus_EndOfStream; return nil; }
-                            inputGiven = YES;
-                            *outStatus = AVAudioConverterInputStatus_HaveData;
-                            return inBuffer;
-                        }];
-
-                        [outFile writeFromBuffer:outBuffer error:nil];
-                        duration = MAX(1, MIN((NSInteger)(framesToRead / inFile.fileFormat.sampleRate), 60));
-                    }
-                }
-            }
-
-            Class converterCls = NSClassFromString(@"VoiceConverter");
-            SEL encSel = NSSelectorFromString(@"EncodeWavToAmr:amrSavePath:sampleRateType:");
-            if ([converterCls respondsToSelector:encSel]) {
-                NSLog(@"[UUUVoiceFun] +[VoiceConverter EncodeWavToAmr...] 验证通过");
-                NSMethodSignature *sig = [converterCls methodSignatureForSelector:encSel];
-                NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
-                [inv setTarget:converterCls];
-                [inv setSelector:encSel];
-                [inv setArgument:&wavPath atIndex:2];
-                [inv setArgument:&amrPath atIndex:3];
-                int type = 0;
-                [inv setArgument:&type atIndex:4];
-                [inv invoke];
-                amrData = [NSData dataWithContentsOfFile:amrPath];
-            } else {
-                NSLog(@"[UUUVoiceFun] EncodeWavToAmr 不存在！扫描 VoiceConverter...");
-                dumpMethodsForClass(converterCls, YES);
-            }
-        } @catch (NSException *e) { NSLog(@"[UUUVoiceFun] MP3转码异常: %@", e); }
-    } else {
-        amrData = [NSData dataWithContentsOfFile:filePath];
-    }
-
-    dispatch_async(dispatch_get_main_queue(), ^{
-        if (amrData && amrData.length > 0) {
-            verifyAndSendVoice(amrData, duration, self.currentChannel);
-            [self close];
+        if (normalizedList.count > 0) {
+            [normalizedList sortUsingDescriptors:@[[NSSortDescriptor sortDescriptorWithKey:@"name" ascending:YES]]];
+            UUUVoiceFunDetailViewController *detailVC = [[UUUVoiceFunDetailViewController alloc] init];
+            detailVC.voiceList = normalizedList;
+            detailVC.currentChannel = self.currentChannel;
+            detailVC.title = [fileName stringByDeletingPathExtension];
+            [self.navigationController pushViewController:detailVC animated:YES];
         } else {
-            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"解析失败" message:@"文件为空或格式不支持" preferredStyle:UIAlertControllerStyleAlert];
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"提示"
+                message:@"该 Plist 文件格式不兼容或为空"
+                preferredStyle:UIAlertControllerStyleAlert];
             [alert addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleCancel handler:nil]];
             [self presentViewController:alert animated:YES completion:nil];
         }
-    });
+    } @catch (NSException *e) { NSLog(@"[UUUVoiceFun] Plist解析失败: %@", e); }
 }
 @end
 
