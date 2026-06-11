@@ -111,10 +111,8 @@ static void showAntiRevokeToast() {
                                                          object:nil 
                                                           queue:nil
                                                      usingBlock:^(NSNotification *note) {
-            if (NSClassFromString(@"WKSystemMessageHandler")) {
-                %init(UUUTalkAntiRevoke);
-            }
+            [[NSNotificationCenter defaultCenter] removeObserver:self];
+            %init(UUUTalkAntiRevoke);
         }];
     }
-    %init;
 }
