@@ -17,6 +17,17 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify checkout
+        run: |
+          echo "=== Current commit ==="
+          git log -1 --oneline
+          echo "=== Git status ==="
+          git status
+          echo "=== Check for uncommitted Tweak.x changes ==="
+          git diff HEAD -- FunVoice/Tweak.x | head -50 || true
 
       - name: Cache Theos + SDK
         uses: actions/cache@v4
