@@ -394,5 +394,4 @@ static void initVoiceFunModule_once() {
             initVoiceFunModule_once();
         }];
     }
-    %init;
 }
