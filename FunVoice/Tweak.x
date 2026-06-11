@@ -7,21 +7,30 @@
 @interface WKConversationVC : UIViewController
 @end
 
-// ==========================================
-// 原生协议声明
-// ==========================================
-@protocol UUUTalkCoreProtocols <NSObject>
-+ (int)EncodeWavToAmr:(NSString *)wavPath amrSavePath:(NSString *)amrPath sampleRateType:(int)type;
-- (instancetype)initWithData:(NSData *)data second:(NSInteger)second waveform:(NSData *)waveform;
-+ (id)shared;
-- (id)chatManager;
-- (void)sendMessage:(id)msg channel:(id)channel;
-@end
+#pragma mark - 1. 运行时方法扫描器 (Runtime Scanner)
 
-#pragma mark - 1. 核心发送引擎 (alloc + init 实例方法)
+static void dumpMethodsForClass(Class cls, BOOL isClassMethod) {
+    if (!cls) return;
+    unsigned int count = 0;
+    Method *methods = class_copyMethodList(isClassMethod ? object_getClass(cls) : cls, &count);
+    NSMutableString *logStr = [NSMutableString stringWithFormat:@"\n[%@] 真实%@方法列表 (%d个):\n",
+        NSStringFromClass(cls), isClassMethod ? @"类(+)" : @"实例(-)", count];
+    for (int i = 0; i < count; i++) {
+        SEL sel = method_getName(methods[i]);
+        [logStr appendFormat:@"  %@ %s\n", isClassMethod ? @"+" : @"-", sel_getName(sel)];
+    }
+    free(methods);
+    NSLog(@"%@", logStr);
+}
 
-static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
-    if (!amrData || !channel) return;
+#pragma mark - 2. 核心发送引擎 (全链路运行时自检)
+
+static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) {
+    if (!amrData || !channel) {
+        NSLog(@"[UUUVoiceFun] ❌ 拦截：amrData 或 channel 为空");
+        return;
+    }
+    NSLog(@"[UUUVoiceFun] Channel 真实类型: %@", NSStringFromClass([channel class]));
 
     NSMutableData *dummyWaveform = [NSMutableData dataWithCapacity:100];
     for (int i = 0; i < 100; i++) {
@@ -31,27 +40,93 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
 
     dispatch_async(dispatch_get_main_queue(), ^{
         @try {
-            Class voiceContentClass = NSClassFromString(@"WKVoiceContent");
-            if (voiceContentClass) {
-                id<UUUTalkCoreProtocols> allocatedVoice = [voiceContentClass alloc];
-                id voiceContent = [allocatedVoice initWithData:amrData second:duration waveform:dummyWaveform];
-
-                Class sdkClass = NSClassFromString(@"WKSDK");
-                id<UUUTalkCoreProtocols> sharedSDK = [sdkClass shared];
-                id<UUUTalkCoreProtocols> chatManager = [sharedSDK chatManager];
-
-                if (chatManager && voiceContent) {
-                    [chatManager sendMessage:voiceContent channel:channel];
-                    NSLog(@"[UUUVoiceFun] 趣味语音安全组装并发送成功！");
-                }
+            // === 验证 1: WKVoiceContent ===
+            Class voiceContentCls = NSClassFromString(@"WKVoiceContent");
+            if (!voiceContentCls) {
+                NSLog(@"[UUUVoiceFun] ❌ 找不到 WKVoiceContent 类");
+                return;
             }
+
+            SEL initSel = NSSelectorFromString(@"initWithData:second:waveform:");
+            id voiceContent = nil;
+
+            if ([voiceContentCls respondsToSelector:initSel]) {
+                NSLog(@"[UUUVoiceFun] ✅ +[WKVoiceContent initWithData:second:waveform:] 存在");
+                // 类方法：用 NSInvocation 正确处理 NSInteger 参数
+                NSMethodSignature *sig = [voiceContentCls methodSignatureForSelector:initSel];
+                NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+                [inv setTarget:voiceContentCls];
+                [inv setSelector:initSel];
+                [inv setArgument:&amrData atIndex:2];
+                [inv setArgument:&duration atIndex:3];
+                [inv setArgument:&dummyWaveform atIndex:4];
+                [inv invoke];
+                __unsafe_unretained id ret = nil;
+                [inv getReturnValue:&ret];
+                voiceContent = ret;
+            } else if ([voiceContentCls instancesRespondToSelector:initSel]) {
+                NSLog(@"[UUUVoiceFun] ✅ -[WKVoiceContent initWithData:second:waveform:] 存在");
+                id instance = [voiceContentCls alloc];
+                NSMethodSignature *sig = [instance methodSignatureForSelector:initSel];
+                NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+                [inv setTarget:instance];
+                [inv setSelector:initSel];
+                [inv setArgument:&amrData atIndex:2];
+                [inv setArgument:&duration atIndex:3];
+                [inv setArgument:&dummyWaveform atIndex:4];
+                [inv invoke];
+                __unsafe_unretained id ret = nil;
+                [inv getReturnValue:&ret];
+                voiceContent = ret;
+            } else {
+                NSLog(@"[UUUVoiceFun] ❌ initWithData:second:waveform: 不存在！扫描全量方法...");
+                dumpMethodsForClass(voiceContentCls, YES);
+                dumpMethodsForClass(voiceContentCls, NO);
+                return;
+            }
+
+            if (!voiceContent) {
+                NSLog(@"[UUUVoiceFun] ❌ voiceContent 实例化失败");
+                return;
+            }
+            NSLog(@"[UUUVoiceFun] ✅ voiceContent 创建成功，类型: %@", NSStringFromClass([voiceContent class]));
+
+            // === 验证 2: WKSDK -> chatManager ===
+            Class sdkClass = NSClassFromString(@"WKSDK");
+            if (![sdkClass respondsToSelector:@selector(shared)]) {
+                NSLog(@"[UUUVoiceFun] ❌ WKSDK 没有 shared 方法");
+                return;
+            }
+            id sharedSDK = [sdkClass performSelector:@selector(shared)];
+            if (![sharedSDK respondsToSelector:@selector(chatManager)]) {
+                NSLog(@"[UUUVoiceFun] ❌ sharedSDK 没有 chatManager 方法");
+                return;
+            }
+            id chatManager = [sharedSDK performSelector:@selector(chatManager)];
+            NSLog(@"[UUUVoiceFun] ✅ chatManager 获取成功，类型: %@", NSStringFromClass([chatManager class]));
+
+            // === 验证 3: sendMessage:channel: ===
+            SEL sendSel = NSSelectorFromString(@"sendMessage:channel:");
+            if (![chatManager respondsToSelector:sendSel]) {
+                NSLog(@"[UUUVoiceFun] ❌ chatManager 没有 sendMessage:channel:！扫描全量方法...");
+                dumpMethodsForClass([chatManager class], NO);
+                return;
+            }
+
+            NSLog(@"[UUUVoiceFun] ✅ 全链路验证通过，准备发送");
+            #pragma clang diagnostic push
+            #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+            [chatManager performSelector:sendSel withObject:voiceContent withObject:channel];
+            #pragma clang diagnostic pop
+            NSLog(@"[UUUVoiceFun] 🚀 发送指令已安全投递！");
+
         } @catch (NSException *e) {
-            NSLog(@"[UUUVoiceFun] 发送异常拦截: %@", e);
+            NSLog(@"[UUUVoiceFun] ❌ 异常拦截: %@", e);
         }
     });
 }
 
-#pragma mark - 2. 趣味语音主面板
+#pragma mark - 3. 趣味语音主面板 (自检版)
 
 @interface UUUVoiceFunViewController : UIViewController <UITableViewDelegate, UITableViewDataSource, UIDocumentPickerDelegate>
 @property (nonatomic, strong) UITableView *tableView;
@@ -64,7 +139,7 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = @"趣味语音";
+    self.title = @"趣味语音 (自检版)";
     self.view.backgroundColor = [UIColor groupTableViewBackgroundColor];
     self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"< 关闭" style:UIBarButtonItemStylePlain target:self action:@selector(close)];
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"导入MP3" style:UIBarButtonItemStylePlain target:self action:@selector(importVoice)];
@@ -104,10 +179,9 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
 }
 
 - (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
-    NSURL *fileURL = urls.firstObject;
-    if (!fileURL) return;
-    NSString *destPath = [self.basePath stringByAppendingPathComponent:fileURL.lastPathComponent];
-    [[NSFileManager defaultManager] copyItemAtURL:fileURL toURL:[NSURL fileURLWithPath:destPath] error:nil];
+    if (!urls.firstObject) return;
+    NSString *destPath = [self.basePath stringByAppendingPathComponent:urls.firstObject.lastPathComponent];
+    [[NSFileManager defaultManager] copyItemAtURL:urls.firstObject toURL:[NSURL fileURLWithPath:destPath] error:nil];
     [self loadVoicePacks];
 }
 
@@ -128,12 +202,9 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
         cell.accessoryView = sendBtn;
     }
 
-    NSString *fileName = self.dataSource[indexPath.row];
-    cell.textLabel.text = fileName;
+    cell.textLabel.text = self.dataSource[indexPath.row];
     cell.imageView.image = [UIImage systemImageNamed:@"music.note"];
-
-    UIButton *btn = (UIButton *)cell.accessoryView;
-    btn.tag = indexPath.row;
+    ((UIButton *)cell.accessoryView).tag = indexPath.row;
 
     return cell;
 }
@@ -143,12 +214,8 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
 }
 
 - (void)mp3SendButtonClicked:(UIButton *)sender {
-    NSInteger row = sender.tag;
-    if (row >= self.dataSource.count) return;
-
-    NSString *fileName = self.dataSource[row];
-    NSString *fullPath = [self.basePath stringByAppendingPathComponent:fileName];
-
+    if (sender.tag >= self.dataSource.count) return;
+    NSString *fullPath = [self.basePath stringByAppendingPathComponent:self.dataSource[sender.tag]];
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         [self safeConvertAndSendAudio:fullPath];
     });
@@ -165,66 +232,71 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
         [[NSFileManager defaultManager] removeItemAtPath:amrPath error:nil];
 
         @try {
-            NSURL *inURL = [NSURL fileURLWithPath:filePath];
-            AVAudioFile *inFile = [[AVAudioFile alloc] initForReading:inURL error:nil];
-
+            AVAudioFile *inFile = [[AVAudioFile alloc] initForReading:[NSURL fileURLWithPath:filePath] error:nil];
             if (inFile && inFile.fileFormat.sampleRate > 0) {
-                AVAudioFormat *outFormat = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatInt16 sampleRate:8000 channels:1 interleaved:YES];
-                AVAudioFile *outFile = [[AVAudioFile alloc] initForWriting:[NSURL fileURLWithPath:wavPath] settings:outFormat.settings error:nil];
+                AVAudioFormat *outFmt = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatInt16 sampleRate:8000 channels:1 interleaved:YES];
+                AVAudioFile *outFile = [[AVAudioFile alloc] initForWriting:[NSURL fileURLWithPath:wavPath] settings:outFmt.settings error:nil];
 
-                AVAudioFrameCount framesToRead = (AVAudioFrameCount)MIN(inFile.length, inFile.fileFormat.sampleRate * 60.0);
+                AVAudioFrameCount fToRead = (AVAudioFrameCount)MIN(inFile.length, inFile.fileFormat.sampleRate * 60.0);
+                if (fToRead > 0) {
+                    AVAudioPCMBuffer *inBuf = [[AVAudioPCMBuffer alloc] initWithPCMFormat:inFile.processingFormat frameCapacity:fToRead];
+                    [inFile readIntoBuffer:inBuf frameCount:fToRead error:nil];
 
-                if (framesToRead > 0) {
-                    AVAudioPCMBuffer *inBuffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:inFile.processingFormat frameCapacity:framesToRead];
-                    [inFile readIntoBuffer:inBuffer frameCount:framesToRead error:nil];
+                    AVAudioConverter *cv = [[AVAudioConverter alloc] initFromFormat:inBuf.format toFormat:outFmt];
+                    if (cv) {
+                        AVAudioFrameCount outCap = (AVAudioFrameCount)(fToRead * (8000.0 / inFile.fileFormat.sampleRate));
+                        AVAudioPCMBuffer *outBuf = [[AVAudioPCMBuffer alloc] initWithPCMFormat:outFmt frameCapacity:MAX(100, outCap)];
 
-                    AVAudioConverter *converter = [[AVAudioConverter alloc] initFromFormat:inBuffer.format toFormat:outFormat];
-                    if (converter) {
-                        AVAudioFrameCount outFrames = (AVAudioFrameCount)(framesToRead * (8000.0 / inFile.fileFormat.sampleRate));
-                        AVAudioPCMBuffer *outBuffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:outFormat frameCapacity:MAX(100, outFrames)];
-
-                        __block BOOL inputGiven = NO;
-                        [converter convertToBuffer:outBuffer error:nil withInputFromBlock:^AVAudioBuffer *(AVAudioPacketCount inNumberOfPackets, AVAudioConverterInputStatus *outStatus) {
-                            if (inputGiven) { *outStatus = AVAudioConverterInputStatus_EndOfStream; return nil; }
-                            inputGiven = YES;
-                            *outStatus = AVAudioConverterInputStatus_HaveData;
-                            return inBuffer;
+                        __block BOOL given = NO;
+                        [cv convertToBuffer:outBuf error:nil withInputFromBlock:^AVAudioBuffer *(AVAudioPacketCount p, AVAudioConverterInputStatus *s) {
+                            if (given) { *s = AVAudioConverterInputStatus_EndOfStream; return nil; }
+                            given = YES; *s = AVAudioConverterInputStatus_HaveData; return inBuf;
                         }];
-
-                        [outFile writeFromBuffer:outBuffer error:nil];
-                        duration = MAX(1, MIN((NSInteger)(framesToRead / inFile.fileFormat.sampleRate), 60));
+                        [outFile writeFromBuffer:outBuf error:nil];
+                        duration = MAX(1, MIN((NSInteger)(fToRead / inFile.fileFormat.sampleRate), 60));
                     }
                 }
 
                 inFile = nil;
                 outFile = nil;
 
+                // 验证 VoiceConverter
                 Class converterCls = NSClassFromString(@"VoiceConverter");
-                if (converterCls) {
-                    id<UUUTalkCoreProtocols> converterProto = (id<UUUTalkCoreProtocols>)converterCls;
-                    [converterProto EncodeWavToAmr:wavPath amrSavePath:amrPath sampleRateType:0];
+                SEL encSel = NSSelectorFromString(@"EncodeWavToAmr:amrSavePath:sampleRateType:");
+                if ([converterCls respondsToSelector:encSel]) {
+                    NSLog(@"[UUUVoiceFun] ✅ +[VoiceConverter EncodeWavToAmr...] 验证通过");
+                    NSMethodSignature *sig = [converterCls methodSignatureForSelector:encSel];
+                    NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+                    [inv setTarget:converterCls];
+                    [inv setSelector:encSel];
+                    [inv setArgument:&wavPath atIndex:2];
+                    [inv setArgument:&amrPath atIndex:3];
+                    int type = 0;
+                    [inv setArgument:&type atIndex:4];
+                    [inv invoke];
                     amrData = [NSData dataWithContentsOfFile:amrPath];
+                } else {
+                    NSLog(@"[UUUVoiceFun] ❌ EncodeWavToAmr 不存在！扫描 VoiceConverter...");
+                    dumpMethodsForClass(converterCls, YES);
                 }
             }
-        } @catch (NSException *e) { NSLog(@"[UUUVoiceFun] MP3转码容错拦截: %@", e); }
+        } @catch (NSException *e) { NSLog(@"[UUUVoiceFun] MP3转码异常: %@", e); }
     } else {
         amrData = [NSData dataWithContentsOfFile:filePath];
     }
 
     dispatch_async(dispatch_get_main_queue(), ^{
         if (amrData) {
-            sendAMRVoiceData(amrData, duration, self.currentChannel);
+            verifyAndSendVoice(amrData, duration, self.currentChannel);
             [self close];
         } else {
-            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"解析失败" message:@"MP3文件已损坏或不支持转码" preferredStyle:UIAlertControllerStyleAlert];
-            [alert addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleCancel handler:nil]];
-            [self presentViewController:alert animated:YES completion:nil];
+            NSLog(@"[UUUVoiceFun] ❌ 音频解析失败");
         }
     });
 }
 @end
 
-#pragma mark - 3. Hook: WKConversationVC
+#pragma mark - 4. Hook: WKConversationVC (带 channel 安全校验)
 
 %group UUUVoiceFunHooks
 
@@ -233,7 +305,6 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
 - (void)viewDidLoad {
     %orig;
 
-    // 按钮去重：防止 viewDidLoad 多次调用时创建重复按钮
     if ([self.view viewWithTag:888999]) return;
 
     UIButton *floatBtn = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -273,13 +344,27 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
 
 %new
 - (void)uuu_openVoicePanel {
-    id channel = [self valueForKey:@"channel"];
+    SEL channelSel = NSSelectorFromString(@"channel");
+    if (![self respondsToSelector:channelSel]) {
+        NSLog(@"[UUUVoiceFun] ❌ WKConversationVC 没有 channel 方法！扫描...");
+        dumpMethodsForClass([self class], NO);
+        return;
+    }
+
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+    id channel = [self performSelector:channelSel];
+    #pragma clang diagnostic pop
+
     if (channel) {
+        NSLog(@"[UUUVoiceFun] ✅ channel 获取成功，类型: %@", NSStringFromClass([channel class]));
         UUUVoiceFunViewController *vc = [[UUUVoiceFunViewController alloc] init];
         vc.currentChannel = channel;
         UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
         nav.modalPresentationStyle = UIModalPresentationFullScreen;
         [self presentViewController:nav animated:YES completion:nil];
+    } else {
+        NSLog(@"[UUUVoiceFun] ❌ channel 返回 nil");
     }
 }
 
@@ -287,7 +372,7 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
 
 %end
 
-#pragma mark - 4. 模块初始化
+#pragma mark - 5. 模块初始化 (单点 %init)
 
 static void initVoiceFunModule_once() {
     static BOOL initialized = NO;
