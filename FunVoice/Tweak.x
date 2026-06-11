@@ -334,19 +334,19 @@ static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) 
 
     NSString *ext = fileURL.pathExtension.lowercaseString;
     if ([ext isEqualToString:@"mp3"]) {
-        // 【核心修复】：在释放安全权限前，先把 MP3 复制到本地临时目录
-        // 防止后台转码线程读取时权限已被系统回收，导致 0 字节空文件
-        NSString *localSafePath = [NSTemporaryDirectory() stringByAppendingPathComponent:fileURL.lastPathComponent];
-        [[NSFileManager defaultManager] removeItemAtPath:localSafePath error:nil];
-        NSError *copyErr = nil;
-        [[NSFileManager defaultManager] copyItemAtURL:fileURL toURL:[NSURL fileURLWithPath:localSafePath] error:&copyErr];
-        
+        // 【核心修复】：先把文件数据读进内存，彻底绕过 iOS 文件安全锁
+        // 防止后台转码线程读取时权限已被系统回收导致 0 字节空文件
+        NSData *fileData = [NSData dataWithContentsOfURL:fileURL];
         if (accessed) [fileURL stopAccessingSecurityScopedResource];
         
-        if (copyErr) {
-            NSLog(@"[UUUVoiceFun] MP3 复制到本地失败: %@", copyErr);
+        if (!fileData || fileData.length == 0) {
+            NSLog(@"[UUUVoiceFun] MP3 读取失败：文件为空或权限被拒绝");
+            if (accessed) {} // 已释放
             return;
         }
+        
+        NSString *localSafePath = [NSTemporaryDirectory() stringByAppendingPathComponent:fileURL.lastPathComponent];
+        [fileData writeToFile:localSafePath atomically:YES];
         
         UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"正在提纯转换..."
             message:@"正在将 MP3 净化为专属 Plist 语音包"
@@ -355,7 +355,6 @@ static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) 
 
         NSURL *safeLocalURL = [NSURL fileURLWithPath:localSafePath];
         [self convertMP3ToSafePlist:safeLocalURL completion:^{
-            // 转换完毕后清理临时文件
             [[NSFileManager defaultManager] removeItemAtPath:localSafePath error:nil];
             [alert dismissViewControllerAnimated:YES completion:^{
                 [self loadVoicePacks];
@@ -367,17 +366,22 @@ static void verifyAndSendVoice(NSData *amrData, NSInteger duration, id channel) 
             }];
         }];
     } else if ([ext isEqualToString:@"plist"]) {
-        NSString *destPath = [self.basePath stringByAppendingPathComponent:fileURL.lastPathComponent];
-        [[NSFileManager defaultManager] copyItemAtURL:fileURL toURL:[NSURL fileURLWithPath:destPath] error:nil];
-        [self loadVoicePacks];
+        // Plist 也先读内存再写入，统一安全策略
+        NSData *fileData = [NSData dataWithContentsOfURL:fileURL];
         if (accessed) [fileURL stopAccessingSecurityScopedResource];
+        
+        if (fileData && fileData.length > 0) {
+            NSString *destPath = [self.basePath stringByAppendingPathComponent:fileURL.lastPathComponent];
+            [fileData writeToFile:destPath atomically:YES];
+            [self loadVoicePacks];
+        }
     } else {
+        if (accessed) [fileURL stopAccessingSecurityScopedResource];
         UIAlertController *err = [UIAlertController alertControllerWithTitle:@"格式错误"
             message:@"请导入 MP3 音乐或 Plist 语音包"
             preferredStyle:UIAlertControllerStyleAlert];
         [err addAction:[UIAlertAction actionWithTitle:@"好的" style:UIAlertActionStyleCancel handler:nil]];
         [self presentViewController:err animated:YES completion:nil];
-        if (accessed) [fileURL stopAccessingSecurityScopedResource];
     }
 }
 
