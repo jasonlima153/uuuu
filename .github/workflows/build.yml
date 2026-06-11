@@ -61,6 +61,7 @@ jobs:
       - name: Build FunVoice.dylib
         run: |
           cd FunVoice
+          rm -rf .theos/obj .theos/build .theos/packages
           make clean || true
           make
 
