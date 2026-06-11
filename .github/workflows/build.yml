@@ -58,6 +58,14 @@ jobs:
           make clean || true
           make
 
+      - name: Verify FunVoice source
+        run: |
+          cd FunVoice
+          echo "=== Tweak.x last 30 lines ==="
+          tail -30 Tweak.x
+          echo "=== Tweak.x line count ==="
+          wc -l Tweak.x
+
       - name: Build FunVoice.dylib
         run: |
           cd FunVoice
