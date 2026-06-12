@@ -1,29 +1,12 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
-#import <objc/runtime.h>
 
 #pragma mark - 前向声明
 @interface WKConversationVC : UIViewController
 @end
 
-#pragma mark - 1. 运行时方法扫描器 (调试安全网，正常流程不触发)
-
-static void dumpMethodsForClass(Class cls, BOOL isClassMethod) {
-    if (!cls) return;
-    unsigned int count = 0;
-    Method *methods = class_copyMethodList(isClassMethod ? object_getClass(cls) : cls, &count);
-    NSMutableString *logStr = [NSMutableString stringWithFormat:@"\n[%@] 真实%@方法列表 (%d个):\n",
-        NSStringFromClass(cls), isClassMethod ? @"类(+)" : @"实例(-)", count];
-    for (int i = 0; i < count; i++) {
-        SEL sel = method_getName(methods[i]);
-        [logStr appendFormat:@"  %@ %s\n", isClassMethod ? @"+" : @"-", sel_getName(sel)];
-    }
-    free(methods);
-    NSLog(@"%@", logStr);
-}
-
-#pragma mark - 2. 核心接口协议声明 (严格匹配 App 底层)
+#pragma mark - 1. 核心接口协议声明 (严格匹配 App 底层)
 
 @protocol UUUTalkCoreProtocols <NSObject>
 + (int)EncodeWavToAmr:(NSString *)wavPath amrSavePath:(NSString *)amrPath sampleRateType:(int)type;
