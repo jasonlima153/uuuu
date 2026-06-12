@@ -2,6 +2,22 @@
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
 
+// 前向声明 + 协议前置，避免编译错误
+@interface WKConversationVC : UIViewController
+@end
+
+@interface WKVoiceContent : NSObject
+@end
+
+@protocol UUUTalkCoreProtocols <NSObject>
++ (int)EncodeWavToAmr:(NSString *)wavPath amrSavePath:(NSString *)amrPath sampleRateType:(int)type;
++ (int)DecodeAmrToWav:(NSString *)amrPath wavSavePath:(NSString *)wavPath sampleRateType:(int)type;
++ (instancetype)initWithData:(NSData *)data second:(NSInteger)second waveform:(NSData *)waveform;
++ (id)shared;
+- (id)chatManager;
+- (void)sendMessage:(id)msg channel:(id)channel;
+@end
+
 // ==========================================
 // 1. 全局弹药库 (保存你选中的语音)
 // ==========================================
@@ -340,9 +356,6 @@
 // ==========================================
 // 5. 初始化
 // ==========================================
-
-@interface WKConversationVC : UIViewController
-@end
 
 %ctor {
     if (NSClassFromString(@"WKConversationVC")) {
