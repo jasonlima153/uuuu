@@ -18,6 +18,13 @@
 - (void)sendMessage:(id)msg channel:(id)channel;
 @end
 
+// 控制面板前向声明，供 %hook 块内使用
+@interface UUUVoiceFunViewController : UIViewController <UITableViewDelegate, UITableViewDataSource, UIDocumentPickerDelegate>
+@property (nonatomic, strong) UITableView *tableView;
+@property (nonatomic, strong) NSMutableArray *dataSource;
+@property (nonatomic, strong) NSString *basePath;
+@end
+
 // ==========================================
 // 1. 全局弹药库 (保存你选中的语音)
 // ==========================================
@@ -119,12 +126,6 @@
 // ==========================================
 // 4. 控制面板 (管理与装备语音)
 // ==========================================
-
-@interface UUUVoiceFunViewController : UIViewController <UITableViewDelegate, UITableViewDataSource, UIDocumentPickerDelegate>
-@property (nonatomic, strong) UITableView *tableView;
-@property (nonatomic, strong) NSMutableArray *dataSource;
-@property (nonatomic, strong) NSString *basePath;
-@end
 
 @implementation UUUVoiceFunViewController
 
