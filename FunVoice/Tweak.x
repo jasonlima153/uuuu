@@ -17,7 +17,7 @@
 @end
 
 // ==========================================
-// 1. 全局弹药库 (保存你选中的语音文件路径)
+// 1. 全局弹药库
 // ==========================================
 @interface UUUVoiceManager : NSObject
 @property (nonatomic, strong) NSString *readyWavPath;
@@ -34,7 +34,7 @@
 @end
 
 // ==========================================
-// 2. 核心绝杀：底层 WAV 文件掉包拦截！
+// 2. 核心绝杀：底层 WAV 文件掉包拦截
 // ==========================================
 %group UUUVoiceFunHooks
 
@@ -111,17 +111,17 @@
 %end
 
 // ==========================================
-// 4. 控制面板 (支持 MP3/AMR 统一提纯)
+// 4. 控制面板 (水泵引擎版 - 循环流式提取)
 // ==========================================
 
 @implementation UUUVoiceFunViewController
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = @"趣味语音 (掉包狙击版)";
+    self.title = @"趣味语音 (水泵引擎版)";
     self.view.backgroundColor = [UIColor groupTableViewBackgroundColor];
     self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"< 关闭" style:UIBarButtonItemStylePlain target:self action:@selector(close)];
-    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"导入MP3/AMR" style:UIBarButtonItemStylePlain target:self action:@selector(importVoice)];
+    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"导入MP3" style:UIBarButtonItemStylePlain target:self action:@selector(importVoice)];
 
     self.basePath = [[NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject] stringByAppendingPathComponent:@"UUUWavPacks"];
     [[NSFileManager defaultManager] createDirectoryAtPath:self.basePath withIntermediateDirectories:YES attributes:nil error:nil];
@@ -139,7 +139,7 @@
     footerLabel.numberOfLines = 0;
     footerLabel.font = [UIFont systemFontOfSize:13];
     footerLabel.textColor = [UIColor darkGrayColor];
-    footerLabel.text = @"【使用秘籍】\n1. 点击右侧【装备】将语音上膛。\n2. 去聊天框按住原生【按住说话】录制 1 秒松手。\n3. 原生录音将被瞬间替换为你的音频发送！0 卡死！";
+    footerLabel.text = @"【使用秘籍】\n1. 点击右侧【装备】将语音上膛。\n2. 去聊天框按住原生【按住说话】录制 1 秒松手。\n3. 原生录音将被瞬间替换发送！0 卡死！";
     self.tableView.tableFooterView = footerLabel;
 
     [self loadVoicePacks];
@@ -166,7 +166,7 @@
 }
 
 - (BOOL)createPureWav:(NSData *)pcmData savePath:(NSString *)savePath {
-    if (!pcmData) return NO;
+    if (!pcmData || pcmData.length == 0) return NO;
     uint32_t dataSize = (uint32_t)pcmData.length;
     NSMutableData *wavData = [NSMutableData data];
     [wavData appendBytes:"RIFF" length:4];
@@ -195,69 +195,62 @@
     NSString *fileName = [[fileURL lastPathComponent] stringByDeletingPathExtension];
     NSString *finalWavPath = [self.basePath stringByAppendingPathComponent:[NSString stringWithFormat:@"%@.wav", fileName]];
 
-    UIAlertController *loading = [UIAlertController alertControllerWithTitle:@"正在提纯" message:@"正在转换为完美的 WAV 标准格式..." preferredStyle:UIAlertControllerStyleAlert];
+    UIAlertController *loading = [UIAlertController alertControllerWithTitle:@"正在提纯" message:@"正在提取全量音频数据..." preferredStyle:UIAlertControllerStyleAlert];
     [self presentViewController:loading animated:YES completion:nil];
 
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
-        BOOL success = NO;
+        __block BOOL success = NO;
         if ([ext isEqualToString:@"mp3"]) {
             @try {
                 @autoreleasepool {
                     AVAudioFile *inFile = [[AVAudioFile alloc] initForReading:fileURL error:nil];
                     if (inFile && inFile.fileFormat.sampleRate > 0) {
                         AVAudioFormat *outFormat = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatInt16 sampleRate:8000 channels:1 interleaved:YES];
-
-                        // 4096帧切片循环转换
-                        NSMutableData *fullPcmData = [NSMutableData data];
-                        AVAudioFrameCount chunkSize = 4096;
-                        AVAudioPCMBuffer *inBuf = [[AVAudioPCMBuffer alloc] initWithPCMFormat:inFile.processingFormat frameCapacity:chunkSize];
-                        AVAudioPCMBuffer *outBuf = [[AVAudioPCMBuffer alloc] initWithPCMFormat:outFormat frameCapacity:chunkSize];
                         AVAudioConverter *converter = [[AVAudioConverter alloc] initFromFormat:inFile.processingFormat toFormat:outFormat];
 
-                        while (inFile.framePosition < inFile.length && (inFile.framePosition / inFile.fileFormat.sampleRate) < 60.0) {
-                            NSError *err = nil;
-                            [inFile readIntoBuffer:inBuf frameCount:chunkSize error:&err];
-                            if (err || inBuf.frameLength == 0) break;
+                        NSMutableData *fullPcmData = [NSMutableData data];
+                        AVAudioFrameCount bufferSize = 4096;
 
-                            __block BOOL consumed = NO;
-                            [converter convertToBuffer:outBuf error:nil withInputFromBlock:^AVAudioBuffer *(AVAudioPacketCount p, AVAudioConverterInputStatus *s) {
-                                if (consumed) { *s = AVAudioConverterInputStatus_EndOfStream; return nil; }
-                                consumed = YES; *s = AVAudioConverterInputStatus_HaveData; return inBuf;
+                        AVAudioPCMBuffer *inBuffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:inFile.processingFormat frameCapacity:bufferSize];
+                        AVAudioPCMBuffer *outBuffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:outFormat frameCapacity:bufferSize];
+
+                        // 循环流式提取：在 withInputFromBlock 回调里直接读文件，榨干每一帧
+                        while (YES) {
+                            NSError *err = nil;
+                            AVAudioConverterOutputStatus status = [converter convertToBuffer:outBuffer error:&err withInputFromBlock:^AVAudioBuffer *(AVAudioPacketCount inNumberOfPackets, AVAudioConverterInputStatus *outStatus) {
+                                NSError *readErr = nil;
+                                [inFile readIntoBuffer:inBuffer frameCount:inNumberOfPackets error:&readErr];
+                                if (inBuffer.frameLength > 0) {
+                                    *outStatus = AVAudioConverterInputStatus_HaveData;
+                                    return inBuffer;
+                                } else {
+                                    *outStatus = AVAudioConverterInputStatus_EndOfStream;
+                                    return nil;
+                                }
                             }];
 
-                            if (outBuf.frameLength > 0) {
-                                [fullPcmData appendBytes:outBuf.int16ChannelData[0] length:outBuf.frameLength * 2];
+                            if (outBuffer.frameLength > 0) {
+                                [fullPcmData appendBytes:outBuffer.int16ChannelData[0] length:outBuffer.frameLength * 2];
+                            }
+
+                            if (status == AVAudioConverterOutputStatus_Error || status == AVAudioConverterOutputStatus_EndOfStream) {
+                                break;
                             }
                         }
 
-                        success = [self createPureWav:fullPcmData savePath:finalWavPath];
+                        if (fullPcmData.length > 1000) {
+                            success = [self createPureWav:fullPcmData savePath:finalWavPath];
+                        }
                     }
                 }
             } @catch (NSException *e) { NSLog(@"[UUUVoiceFun] MP3转换异常: %@", e); }
-
-        } else if ([ext isEqualToString:@"amr"]) {
-            NSData *fileData = [NSData dataWithContentsOfURL:fileURL];
-            if (fileData.length > 50) {
-                NSString *tmpAmr = [NSTemporaryDirectory() stringByAppendingPathComponent:fileURL.lastPathComponent];
-                [fileData writeToFile:tmpAmr atomically:YES];
-
-                Class converterCls = NSClassFromString(@"VoiceConverter");
-                if (converterCls) {
-                    SEL decodeSel = NSSelectorFromString(@"DecodeAmrToWav:wavSavePath:sampleRateType:");
-                    if ([converterCls respondsToSelector:decodeSel]) {
-                        int (*DecodeFunc)(id, SEL, NSString*, NSString*, int) = (int (*)(id, SEL, NSString*, NSString*, int))[converterCls methodForSelector:decodeSel];
-                        DecodeFunc(converterCls, decodeSel, tmpAmr, finalWavPath, 0);
-                        success = [[NSFileManager defaultManager] fileExistsAtPath:finalWavPath];
-                    }
-                }
-            }
         }
 
         dispatch_async(dispatch_get_main_queue(), ^{
             [loading dismissViewControllerAnimated:YES completion:^{
                 [self loadVoicePacks];
                 if (!success) {
-                    UIAlertController *err = [UIAlertController alertControllerWithTitle:@"失败" message:@"文件损坏或格式不支持" preferredStyle:UIAlertControllerStyleAlert];
+                    UIAlertController *err = [UIAlertController alertControllerWithTitle:@"提取失败" message:@"MP3 解析异常，未能完整提取声音数据。" preferredStyle:UIAlertControllerStyleAlert];
                     [err addAction:[UIAlertAction actionWithTitle:@"知道了" style:UIAlertActionStyleCancel handler:nil]];
                     [self presentViewController:err animated:YES completion:nil];
                 }
