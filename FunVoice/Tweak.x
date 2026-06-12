@@ -129,12 +129,33 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
         return;
     }
 
-    // 强制验证 AMR 文件底层头部标识 #!AMR
-    NSString *header = [[NSString alloc] initWithData:[fileData subdataWithRange:NSMakeRange(0, 5)] encoding:NSASCIIStringEncoding];
-    if (![header isEqualToString:@"#!AMR"]) {
-        UIAlertController *err = [UIAlertController alertControllerWithTitle:@"格式警告" message:@"这不是一个真正的 AMR 文件！\n它可能是直接把后缀改成了 .amr，发出去会报错。\n\n请使用网页转换工具生成标准的 AMR。" preferredStyle:UIAlertControllerStyleAlert];
-        [err addAction:[UIAlertAction actionWithTitle:@"知道了" style:UIAlertActionStyleCancel handler:nil]];
-        [self presentViewController:err animated:YES completion:nil];
+    // 字节级验证 AMR 头部，兼容 AMR-NB (#!AMR) 和 AMR-WB (#!AMR-WB)
+    NSLog(@"[UUUVoiceFun] 导入文件: %@, 大小: %lu 字节, accessed: %d", fileURL.lastPathComponent, (unsigned long)fileData.length, accessed);
+    BOOL validAMR = NO;
+    if (fileData.length >= 6) {
+        const uint8_t *bytes = (const uint8_t *)fileData.bytes;
+        // #!AMR\n (NB) 或 #!AMR-WB\n (WB)
+        if (bytes[0] == '#' && bytes[1] == '!' && bytes[2] == 'A' && bytes[3] == 'M' && bytes[4] == 'R') {
+            validAMR = YES;
+            NSLog(@"[UUUVoiceFun] AMR 头部验证通过 (类型: %s)", (bytes[5] == '-' ? "AMR-WB" : "AMR-NB"));
+        }
+    }
+    if (!validAMR) {
+        // 不硬拦截，给警告但允许导入（有些工具生成的 AMR 头部略有不同）
+        NSLog(@"[UUUVoiceFun] 警告: 文件头部不是标准 #!AMR，前6字节: %02x %02x %02x %02x %02x %02x",
+            ((uint8_t *)fileData.bytes)[0], ((uint8_t *)fileData.bytes)[1], ((uint8_t *)fileData.bytes)[2],
+            ((uint8_t *)fileData.bytes)[3], ((uint8_t *)fileData.bytes)[4], ((uint8_t *)fileData.bytes)[5]);
+        UIAlertController *warn = [UIAlertController alertControllerWithTitle:@"格式提示"
+            message:@"该文件头部不是标准 AMR 格式，但仍会尝试导入。\n如果发送失败，请使用其他工具重新转换。"
+            preferredStyle:UIAlertControllerStyleAlert];
+        [warn addAction:[UIAlertAction actionWithTitle:@"继续导入" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            NSString *fileName = [[fileURL lastPathComponent] stringByDeletingPathExtension];
+            NSString *destPath = [self.basePath stringByAppendingPathComponent:[NSString stringWithFormat:@"%@.amr", fileName]];
+            [fileData writeToFile:destPath atomically:YES];
+            [self loadVoicePacks];
+        }]];
+        [warn addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+        [self presentViewController:warn animated:YES completion:nil];
         return;
     }
 
