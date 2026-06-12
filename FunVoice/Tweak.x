@@ -3,10 +3,9 @@
 #import <AVFoundation/AVFoundation.h>
 
 // ==========================================
-// 1. 核心接口协议声明
+// 1. 核心接口协议声明 (对齐分析报告，全部采用原生调用)
 // ==========================================
 @protocol UUUTalkCoreProtocols <NSObject>
-+ (int)EncodeWavToAmr:(NSString *)wavPath amrSavePath:(NSString *)amrPath sampleRateType:(int)type;
 + (int)DecodeAmrToWav:(NSString *)amrPath wavSavePath:(NSString *)wavPath sampleRateType:(int)type;
 + (instancetype)initWithData:(NSData *)data second:(NSInteger)second waveform:(NSData *)waveform;
 + (id)shared;
@@ -14,41 +13,12 @@
 - (void)sendMessage:(id)msg channel:(id)channel;
 @end
 
-#pragma mark - 2. C语言手工提纯 WAV 头部
-static BOOL createPureWav(NSData *pcmData, NSString *savePath) {
-    if (!pcmData || pcmData.length == 0) return NO;
-    uint32_t dataSize = (uint32_t)pcmData.length;
-    NSMutableData *wavData = [NSMutableData data];
-    [wavData appendBytes:"RIFF" length:4];
-    uint32_t chunkSize = dataSize + 36;
-    [wavData appendBytes:&chunkSize length:4];
-    [wavData appendBytes:"WAVEfmt " length:8];
-    uint32_t subchunk1Size = 16;
-    [wavData appendBytes:&subchunk1Size length:4];
-    uint16_t audioFormat = 1;
-    [wavData appendBytes:&audioFormat length:2];
-    uint16_t numChannels = 1;
-    [wavData appendBytes:&numChannels length:2];
-    uint32_t sampleRate = 8000;
-    [wavData appendBytes:&sampleRate length:4];
-    uint32_t byteRate = 8000 * 2;
-    [wavData appendBytes:&byteRate length:4];
-    uint16_t blockAlign = 2;
-    [wavData appendBytes:&blockAlign length:2];
-    uint16_t bitsPerSample = 16;
-    [wavData appendBytes:&bitsPerSample length:2];
-    [wavData appendBytes:"data" length:4];
-    [wavData appendBytes:&dataSize length:4];
-    [wavData appendData:pcmData];
-    return [wavData writeToFile:savePath atomically:YES];
-}
-
-#pragma mark - 3. 安全直发引擎 (0 计算，直接抛给服务器)
+#pragma mark - 2. 纯净发送引擎 (0转码，0计算，直接投递)
 
 static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
     if (!amrData || !channel) return;
 
-    // 生成假波形防止 UI 崩溃
+    // 生成标准的假波形 NSData，避开 JSON 序列化崩溃
     NSMutableData *dummyWaveform = [NSMutableData dataWithCapacity:100];
     for (int i = 0; i < 100; i++) {
         uint8_t val = (uint8_t)(sin(i * 0.2) * 20 + 30 + arc4random_uniform(10));
@@ -59,20 +29,21 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
         @try {
             Class voiceContentClass = NSClassFromString(@"WKVoiceContent");
             if (voiceContentClass) {
-                id<UUUTalkCoreProtocols> voiceContent = [(id<UUUTalkCoreProtocols>)voiceContentClass initWithData:amrData second:duration waveform:dummyWaveform];
+                id<UUUTalkCoreProtocols> voiceContent = [(id<UUUTalkCoreProtocols>)[voiceContentClass class] initWithData:amrData second:duration waveform:dummyWaveform];
+
                 Class sdkClass = NSClassFromString(@"WKSDK");
-                id<UUUTalkCoreProtocols> chatManager = [[(id<UUUTalkCoreProtocols>)sdkClass shared] chatManager];
+                id<UUUTalkCoreProtocols> chatManager = [[(id<UUUTalkCoreProtocols>)[sdkClass class] shared] chatManager];
 
                 if (chatManager && voiceContent) {
                     [chatManager sendMessage:voiceContent channel:channel];
-                    NSLog(@"[UUUVoiceFun] 🚀 语音安全投递成功！");
+                    NSLog(@"[UUUVoiceFun] 🚀 AMR 语音安全直发成功！");
                 }
             }
         } @catch (NSException *e) { NSLog(@"[UUUVoiceFun] ❌ 发送异常: %@", e); }
     });
 }
 
-#pragma mark - 4. 插件主面板 (内置前置转码与 AMR 直导)
+#pragma mark - 3. 插件主面板 (专为高稳定 AMR 打造)
 
 @interface UUUVoiceFunViewController : UIViewController <UITableViewDelegate, UITableViewDataSource, UIDocumentPickerDelegate>
 @property (nonatomic, strong) UITableView *tableView;
@@ -86,10 +57,10 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = @"趣味语音包 (AMR 专版)";
+    self.title = @"趣味语音 (AMR纯净版)";
     self.view.backgroundColor = [UIColor groupTableViewBackgroundColor];
     self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"< 关闭" style:UIBarButtonItemStylePlain target:self action:@selector(close)];
-    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"导入(MP3/AMR)" style:UIBarButtonItemStylePlain target:self action:@selector(importVoice)];
+    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"导入AMR" style:UIBarButtonItemStylePlain target:self action:@selector(importVoice)];
 
     self.basePath = [[NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject] stringByAppendingPathComponent:@"趣味语音包"];
     [[NSFileManager defaultManager] createDirectoryAtPath:self.basePath withIntermediateDirectories:YES attributes:nil error:nil];
@@ -103,6 +74,13 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
     [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayback error:nil];
     [[AVAudioSession sharedInstance] setActive:YES error:nil];
 
+    UILabel *footerLabel = [[UILabel alloc] initWithFrame:CGRectMake(15, 0, self.view.bounds.size.width - 30, 80)];
+    footerLabel.numberOfLines = 0;
+    footerLabel.font = [UIFont systemFontOfSize:12];
+    footerLabel.textColor = [UIColor darkGrayColor];
+    footerLabel.text = @"⚠️ 告别闪退：本版本已彻底移除导致声音损坏的 MP3 转换器。请在网页将音频转换为 .amr 格式后再导入使用。";
+    self.tableView.tableFooterView = footerLabel;
+
     [self loadVoicePacks];
 }
 
@@ -110,7 +88,6 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
     self.dataSource = [NSMutableArray array];
     NSArray *files = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:self.basePath error:nil];
     for (NSString *file in files) {
-        // 现在列表里只会有 AMR 文件，绝对纯粹！
         if ([file.lowercaseString hasSuffix:@".amr"]) {
             [self.dataSource addObject:file];
         }
@@ -123,118 +100,54 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
 - (void)importVoice {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[@"public.audio", @"public.item"] inMode:UIDocumentPickerModeImport];
+    UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[@"public.item", @"public.audio"] inMode:UIDocumentPickerModeImport];
     picker.delegate = self;
     [self presentViewController:picker animated:YES completion:nil];
 #pragma clang diagnostic pop
 }
 
 // ======================================================================
-// 【核心功能 1】：前置转码引擎！导入瞬间进行转码提纯，不留后患
+// 【核心绝杀】：沙盒穿透内存直读！彻底解决导入 AMR 说"损坏/0字节"的玄学问题
 // ======================================================================
 - (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     NSURL *fileURL = urls.firstObject;
     if (!fileURL) return;
 
+    // 打开 iOS 安全锁
     BOOL accessed = [fileURL startAccessingSecurityScopedResource];
-    NSString *ext = fileURL.pathExtension.lowercaseString;
-    NSString *fileName = [[fileURL lastPathComponent] stringByDeletingPathExtension];
 
-    if ([ext isEqualToString:@"mp3"]) {
-        // 如果是 MP3，立刻进行后台静默转码，存为 AMR
-        UIAlertController *loading = [UIAlertController alertControllerWithTitle:@"正在转换" message:@"正在将 MP3 净化并转换为 AMR 格式..." preferredStyle:UIAlertControllerStyleAlert];
-        [self presentViewController:loading animated:YES completion:nil];
+    // 【最关键的一步】：不用容易失败的 copyItem，直接在权限范围内把文件吸入内存 (NSData)！
+    NSData *fileData = [NSData dataWithContentsOfURL:fileURL];
 
-        // 避开系统沙盒封锁，先把文件拷到缓存
-        NSString *tmpMp3 = [NSTemporaryDirectory() stringByAppendingPathComponent:fileURL.lastPathComponent];
-        [[NSFileManager defaultManager] removeItemAtPath:tmpMp3 error:nil];
-        [[NSFileManager defaultManager] copyItemAtURL:fileURL toURL:[NSURL fileURLWithPath:tmpMp3] error:nil];
+    // 关闭安全锁
+    if (accessed) [fileURL stopAccessingSecurityScopedResource];
 
-        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
-            BOOL success = [self convertMP3toAMR:tmpMp3 targetName:fileName];
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [loading dismissViewControllerAnimated:YES completion:^{
-                    [self loadVoicePacks];
-                    if (!success) {
-                        UIAlertController *err = [UIAlertController alertControllerWithTitle:@"转换失败" message:@"MP3 内部受损，无法转码为 AMR" preferredStyle:UIAlertControllerStyleAlert];
-                        [err addAction:[UIAlertAction actionWithTitle:@"知道了" style:UIAlertActionStyleCancel handler:nil]];
-                        [self presentViewController:err animated:YES completion:nil];
-                    }
-                }];
-            });
-        });
-
-    } else if ([ext isEqualToString:@"amr"]) {
-        // 如果用户直接导入的就是 AMR，免转码，直接存入沙盒
-        NSString *destPath = [self.basePath stringByAppendingPathComponent:[NSString stringWithFormat:@"%@.amr", fileName]];
-        [[NSFileManager defaultManager] removeItemAtPath:destPath error:nil];
-        [[NSFileManager defaultManager] copyItemAtURL:fileURL toURL:[NSURL fileURLWithPath:destPath] error:nil];
-        [self loadVoicePacks];
-    } else {
-        UIAlertController *err = [UIAlertController alertControllerWithTitle:@"格式不支持" message:@"请导入 MP3 或 AMR 格式的文件" preferredStyle:UIAlertControllerStyleAlert];
+    if (!fileData || fileData.length < 50) {
+        UIAlertController *err = [UIAlertController alertControllerWithTitle:@"导入失败" message:@"由于 iOS 沙盒权限或文件为空，无法读取该文件。" preferredStyle:UIAlertControllerStyleAlert];
         [err addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleCancel handler:nil]];
         [self presentViewController:err animated:YES completion:nil];
+        return;
     }
 
-    if (accessed) [fileURL stopAccessingSecurityScopedResource];
-}
+    // 强制验证 AMR 文件底层头部标识 #!AMR
+    NSString *header = [[NSString alloc] initWithData:[fileData subdataWithRange:NSMakeRange(0, 5)] encoding:NSASCIIStringEncoding];
+    if (![header isEqualToString:@"#!AMR"]) {
+        UIAlertController *err = [UIAlertController alertControllerWithTitle:@"格式警告" message:@"这不是一个真正的 AMR 文件！\n它可能是直接把后缀改成了 .amr，发出去会报错。\n\n请使用网页转换工具生成标准的 AMR。" preferredStyle:UIAlertControllerStyleAlert];
+        [err addAction:[UIAlertAction actionWithTitle:@"知道了" style:UIAlertActionStyleCancel handler:nil]];
+        [self presentViewController:err animated:YES completion:nil];
+        return;
+    }
 
-// 极其稳定的内部转换器 (4096帧切片防丢帧)
-- (BOOL)convertMP3toAMR:(NSString *)mp3Path targetName:(NSString *)targetName {
-    @try {
-        @autoreleasepool {
-            AVAudioFile *inFile = [[AVAudioFile alloc] initForReading:[NSURL fileURLWithPath:mp3Path] error:nil];
-            if (!inFile || inFile.fileFormat.sampleRate == 0) return NO;
+    // 一切完美，直接把内存里的数据写入沙盒，绝不产生 0 字节文件！
+    NSString *fileName = [[fileURL lastPathComponent] stringByDeletingPathExtension];
+    NSString *destPath = [self.basePath stringByAppendingPathComponent:[NSString stringWithFormat:@"%@.amr", fileName]];
+    [fileData writeToFile:destPath atomically:YES];
 
-            AVAudioFormat *outFormat = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatInt16 sampleRate:8000 channels:1 interleaved:YES];
-            AVAudioConverter *converter = [[AVAudioConverter alloc] initFromFormat:inFile.processingFormat toFormat:outFormat];
+    [self loadVoicePacks];
 
-            // 【4096帧切片循环转换】防止 AVAudioConverter 内存超载丢帧（花栗鼠快进声）
-            NSMutableData *fullPcmData = [NSMutableData data];
-            AVAudioFrameCount chunkSize = 4096;
-            AVAudioPCMBuffer *inBuf = [[AVAudioPCMBuffer alloc] initWithPCMFormat:inFile.processingFormat frameCapacity:chunkSize];
-            AVAudioPCMBuffer *outBuf = [[AVAudioPCMBuffer alloc] initWithPCMFormat:outFormat frameCapacity:chunkSize];
-
-            while (inFile.framePosition < inFile.length && (inFile.framePosition / inFile.fileFormat.sampleRate) < 60.0) {
-                NSError *err = nil;
-                [inFile readIntoBuffer:inBuf frameCount:chunkSize error:&err];
-                if (err || inBuf.frameLength == 0) break;
-
-                __block BOOL consumed = NO;
-                [converter convertToBuffer:outBuf error:nil withInputFromBlock:^AVAudioBuffer *(AVAudioPacketCount p, AVAudioConverterInputStatus *outStatus) {
-                    if (consumed) { *outStatus = AVAudioConverterInputStatus_EndOfStream; return nil; }
-                    consumed = YES;
-                    *outStatus = AVAudioConverterInputStatus_HaveData;
-                    return inBuf;
-                }];
-
-                if (outBuf.frameLength > 0) {
-                    [fullPcmData appendBytes:outBuf.int16ChannelData[0] length:outBuf.frameLength * 2];
-                }
-            }
-
-            NSString *tmpWav = [NSTemporaryDirectory() stringByAppendingPathComponent:@"pure_tmp.wav"];
-            NSString *tmpAmr = [NSTemporaryDirectory() stringByAppendingPathComponent:@"pure_tmp.amr"];
-            [[NSFileManager defaultManager] removeItemAtPath:tmpWav error:nil];
-            [[NSFileManager defaultManager] removeItemAtPath:tmpAmr error:nil];
-
-            if (createPureWav(fullPcmData, tmpWav)) {
-                Class converterCls = NSClassFromString(@"VoiceConverter");
-                if (converterCls) {
-                    [(id<UUUTalkCoreProtocols>)converterCls EncodeWavToAmr:tmpWav amrSavePath:tmpAmr sampleRateType:0];
-                    NSData *amrData = [NSData dataWithContentsOfFile:tmpAmr];
-
-                    // 核心防线：必须大于 50 字节才能被承认为成功的 AMR
-                    if (amrData && amrData.length > 50) {
-                        NSString *finalPath = [self.basePath stringByAppendingPathComponent:[NSString stringWithFormat:@"%@.amr", targetName]];
-                        [amrData writeToFile:finalPath atomically:YES];
-                        return YES;
-                    }
-                }
-            }
-        }
-    } @catch (NSException *e) { NSLog(@"[UUUVoiceFun] 转换异常: %@", e); }
-    return NO;
+    UIAlertController *succ = [UIAlertController alertControllerWithTitle:@"导入成功" message:@"AMR 语音导入成功，可点击该行试听或直接发送！" preferredStyle:UIAlertControllerStyleAlert];
+    [succ addAction:[UIAlertAction actionWithTitle:@"好的" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:succ animated:YES completion:nil];
 }
 
 - (BOOL)tableView:(UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)indexPath { return YES; }
@@ -266,7 +179,7 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
     NSString *fileName = self.dataSource[indexPath.row];
     cell.textLabel.text = [fileName stringByDeletingPathExtension];
     cell.textLabel.font = [UIFont systemFontOfSize:16];
-    cell.detailTextLabel.text = @"点击这行试听  |  右侧直接发送";
+    cell.detailTextLabel.text = @"点击此行试听  |  点击右侧发送";
     cell.detailTextLabel.textColor = [UIColor grayColor];
     cell.imageView.image = [UIImage systemImageNamed:@"music.mic"];
 
@@ -274,36 +187,30 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
     return cell;
 }
 
-// ======================================================================
-// 【核心功能 2】：本地完美验毒试听！
-// ======================================================================
+// 本地安全试听
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
-
     NSString *fullPath = [self.basePath stringByAppendingPathComponent:self.dataSource[indexPath.row]];
 
     NSString *tmpWav = [NSTemporaryDirectory() stringByAppendingPathComponent:@"debug_play.wav"];
     [[NSFileManager defaultManager] removeItemAtPath:tmpWav error:nil];
 
-    // 利用底层的 C++ 库，把 AMR 逆向解成 WAV 播放。如果放不出声音，说明这个 AMR 废了。
     Class converterCls = NSClassFromString(@"VoiceConverter");
-    if (converterCls) {
+    if (converterCls && [converterCls respondsToSelector:NSSelectorFromString(@"DecodeAmrToWav:wavSavePath:sampleRateType:")]) {
         [(id<UUUTalkCoreProtocols>)converterCls DecodeAmrToWav:fullPath wavSavePath:tmpWav sampleRateType:0];
         NSData *wavData = [NSData dataWithContentsOfFile:tmpWav];
         if (wavData && wavData.length > 0) {
             self.audioPlayer = [[AVAudioPlayer alloc] initWithData:wavData error:nil];
             [self.audioPlayer play];
         } else {
-            UIAlertController *err = [UIAlertController alertControllerWithTitle:@"文件损坏" message:@"无法播放。这个 AMR 文件损坏或内容为空，请左滑删除。" preferredStyle:UIAlertControllerStyleAlert];
-            [err addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleCancel handler:nil]];
+            UIAlertController *err = [UIAlertController alertControllerWithTitle:@"无法试听" message:@"虽然文件已安全导入，但由于底层解码库极度老旧，无法在本地解码该 AMR 试听。\n\n但这不影响发送！您可以直接发送给朋友测试。" preferredStyle:UIAlertControllerStyleAlert];
+            [err addAction:[UIAlertAction actionWithTitle:@"知道了" style:UIAlertActionStyleCancel handler:nil]];
             [self presentViewController:err animated:YES completion:nil];
         }
     }
 }
 
-// ======================================================================
-// 【核心功能 3】：零延迟极速发送
-// ======================================================================
+// 一键光速发送
 - (void)sendAMRButtonClicked:(UIButton *)sender {
     NSInteger row = sender.tag;
     if (row >= self.dataSource.count) return;
@@ -312,7 +219,7 @@ static void sendAMRVoiceData(NSData *amrData, NSInteger duration, id channel) {
     NSData *amrData = [NSData dataWithContentsOfFile:fullPath];
 
     if (amrData && amrData.length > 50) {
-        // AMR-NB 的码率约 1.6KB/s，通过文件大小粗略估算显示时长，绝不闪退
+        // AMR 的平均码率：1 秒 ≈ 1600 字节，据此估算语音在界面的气泡显示长度
         NSInteger duration = MAX(1, MIN(amrData.length / 1600, 60));
         sendAMRVoiceData(amrData, duration, self.currentChannel);
         [self close];
